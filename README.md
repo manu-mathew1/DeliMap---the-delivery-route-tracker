@@ -22,8 +22,9 @@ DeliMap is a high-performance, premium delivery route tracking and optimization 
 - **Cloud Sync:** Synchronizes local tables bidirectionally with Cloud Firestore. Google Sign-In is used to namespaces records `/users/{uid}/receivers/{id}`.
 - **Biometric App Lock:** Secure your dashboard with biometrics (Face ID/Fingerprint) using local authentication APIs.
 
-### 📊 Utility & Export
+### 📊 Utility, Export & Import
 - **CSV Data Export:** Generate and export receiver book lists directly into the device's public Download folder (`delimap_receivers.csv`).
+- **CSV Data Import:** Import receiver lists from `.csv` files. Features automatic header mapping, duplicate prevention (based on name/address matches), and geocoding fallbacks with warning alerts.
 
 ---
 

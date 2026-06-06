@@ -51,6 +51,8 @@ dependencies:
   google_sign_in: ^6.2.1
   path_provider: ^2.1.1
   shared_preferences: ^2.2.3
+  file_picker: ^8.0.0
+  csv: ^8.0.0
 
 dev_dependencies:
   flutter_test:

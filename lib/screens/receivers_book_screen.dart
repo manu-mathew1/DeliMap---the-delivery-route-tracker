@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../db/database_helper.dart';
 import '../models/receiver_record.dart';
+import '../services/import_service.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:uuid/uuid.dart';
@@ -36,6 +37,168 @@ class _ReceiversBookScreenState extends State<ReceiversBookScreen> {
         _loadReceivers();
       }
     });
+  }
+
+  Future<void> _importCSV() async {
+    try {
+      final rows = await ImportService.pickAndParseCSV();
+      if (rows == null) return; // Cancelled
+
+      final columnMapping = ImportService.mapHeaders(rows.first);
+      final nameIdx = columnMapping['name']!;
+      final addressIdx = columnMapping['address']!;
+      final latIdx = columnMapping['latitude']!;
+      final lngIdx = columnMapping['longitude']!;
+
+      if (nameIdx == -1 || addressIdx == -1) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Invalid CSV. "Name" and "Address" columns are required.'),
+            backgroundColor: Color(0xFFFF453A),
+          ),
+        );
+        return;
+      }
+
+      // Check how many rows need geocoding
+      int geocodeCount = 0;
+      for (int i = 1; i < rows.length; i++) {
+        final row = rows[i];
+        if (row.length <= nameIdx || row.length <= addressIdx) continue;
+
+        double? lat;
+        double? lng;
+        if (latIdx != -1 && latIdx < row.length) {
+          lat = double.tryParse(row[latIdx]?.toString() ?? '');
+        }
+        if (lngIdx != -1 && lngIdx < row.length) {
+          lng = double.tryParse(row[lngIdx]?.toString() ?? '');
+        }
+
+        if (lat == null || lng == null) {
+          geocodeCount++;
+        }
+      }
+
+      if (geocodeCount > 10) {
+        final confirm = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFF1C1C1E),
+            title: const Text('Confirm Geocoding', style: TextStyle(color: Colors.white)),
+            content: Text(
+              'There are $geocodeCount entries in this CSV that lack coordinates. '
+              'DeliMap will geocode them using the Google Geocoding API. '
+              'This may take some time and consume API quota. Proceed?',
+              style: const TextStyle(color: Color(0xFF8E8E93)),
+            ),
+            actions: [
+              TextButton(
+                child: const Text('Cancel', style: TextStyle(color: Color(0xFF8E8E93))),
+                onPressed: () => Navigator.pop(context, false),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFF5A623)),
+                child: const Text('Proceed', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                onPressed: () => Navigator.pop(context, true),
+              ),
+            ],
+          ),
+        );
+        if (confirm != true) return;
+      }
+
+      // Show progress overlay
+      double progress = 0.0;
+      String status = "Initializing import...";
+      StateSetter? dialogSetState;
+
+      // We don't await the showDialog directly here, we run the import concurrently and pop it when done.
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1C1C1E),
+            content: StatefulBuilder(
+              builder: (context, setDialogState) {
+                dialogSetState = setDialogState;
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Importing Receivers',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                    const SizedBox(height: 20),
+                    LinearProgressIndicator(
+                      value: progress,
+                      color: const Color(0xFFF5A623),
+                      backgroundColor: const Color(0xFF2C2C2E),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '${(progress * 100).toStringAsFixed(0)}%',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      status,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 12),
+                    ),
+                  ],
+                );
+              },
+            ),
+          );
+        },
+      );
+
+      try {
+        final result = await ImportService.processImport(
+          rows: rows,
+          columnMapping: columnMapping,
+          onProgress: (newStatus, newProgress) {
+            if (dialogSetState != null) {
+              dialogSetState!(() {
+                status = newStatus;
+                progress = newProgress;
+              });
+            }
+          },
+        );
+
+        Navigator.pop(context); // Dismiss progress dialog
+        _loadReceivers();
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Import complete! Imported ${result.importedCount} new, '
+              'skipped ${result.duplicateCount} duplicates, '
+              'errors: ${result.errorCount}.',
+            ),
+            backgroundColor: const Color(0xFF30D158),
+          ),
+        );
+      } catch (e) {
+        Navigator.pop(context); // Dismiss progress dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Import failed: $e'),
+            backgroundColor: const Color(0xFFFF453A),
+          ),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to read CSV: $e'),
+          backgroundColor: const Color(0xFFFF453A),
+        ),
+      );
+    }
   }
 
   @override
@@ -269,9 +432,19 @@ class _ReceiversBookScreenState extends State<ReceiversBookScreen> {
                   'Receivers Directory',
                   style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.add_circle_outline, color: Color(0xFFF5A623), size: 28),
-                  onPressed: _openAddReceiverSheet,
+                Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.upload_file, color: Color(0xFFF5A623), size: 26),
+                      tooltip: 'Import CSV',
+                      onPressed: _importCSV,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.add_circle_outline, color: Color(0xFFF5A623), size: 28),
+                      tooltip: 'Add Receiver',
+                      onPressed: _openAddReceiverSheet,
+                    ),
+                  ],
                 ),
               ],
             ),
