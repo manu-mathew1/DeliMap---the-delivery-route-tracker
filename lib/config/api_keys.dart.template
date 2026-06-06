@@ -1,0 +1,5 @@
+class ApiKeys {
+  // Replace this with your Google Cloud console API Key.
+  // Make sure this key has Google Maps SDK (Android/iOS) and Geocoding API enabled.
+  static const String googleMapsKey = 'YOUR_GOOGLE_MAPS_API_KEY';
+}
