@@ -129,21 +129,36 @@ class CloudSyncService {
       throw Exception('No authenticated user.');
     }
 
-    try {
-      // Force fetching from server with a short timeout to verify online connection.
-      // We query a dummy document inside the 'receivers' subcollection because the security
-      // rules only grant access to '/users/{userId}/receivers/{receiverId}', which makes
-      // direct reads to '/users/{userId}' throw a permission-denied exception.
-      await _firestore
-          .collection('users')
-          .doc(user.uid)
-          .collection('receivers')
-          .doc('connectivity_test')
-          .get(const GetOptions(source: Source.server))
-          .timeout(const Duration(seconds: 3));
-    } catch (e) {
-      print('CloudSyncService: Connection check failed: $e');
-      rethrow;
+    int retryCount = 0;
+    const int maxRetries = 3;
+    int delaySeconds = 1;
+
+    while (true) {
+      try {
+        // Force fetching from server with a short timeout to verify online connection.
+        // We query a dummy document inside the 'receivers' subcollection because the security
+        // rules only grant access to '/users/{userId}/receivers/{receiverId}', which makes
+        // direct reads to '/users/{userId}' throw a permission-denied exception.
+        await _firestore
+            .collection('users')
+            .doc(user.uid)
+            .collection('receivers')
+            .doc('connectivity_test')
+            .get(const GetOptions(source: Source.server))
+            .timeout(const Duration(seconds: 3));
+        return; // Success, connected!
+      } catch (e) {
+        retryCount++;
+        print('CloudSyncService: Connection check attempt $retryCount failed: $e');
+        
+        if (retryCount >= maxRetries) {
+          rethrow; // Final attempt failed, rethrow the exception
+        }
+        
+        // Wait with exponential backoff before the next attempt
+        await Future.delayed(Duration(seconds: delaySeconds));
+        delaySeconds *= 2;
+      }
     }
   }
 }
