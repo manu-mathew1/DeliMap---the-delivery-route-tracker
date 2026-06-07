@@ -6,6 +6,13 @@ import '../db/database_helper.dart';
 import '../services/auth_service.dart';
 import '../services/cloud_sync_service.dart';
 
+enum CloudConnectionStatus {
+  disabled,
+  checking,
+  offline,
+  connected,
+}
+
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({Key? key}) : super(key: key);
 
@@ -19,6 +26,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _googleEmail;
   bool _isSyncing = false;
   String _startLocationType = 'Current GPS';
+  CloudConnectionStatus _connectionStatus = CloudConnectionStatus.disabled;
 
   @override
   void initState() {
@@ -35,8 +43,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _googleEmail = prefs.getString('google_email');
         _startLocationType = prefs.getString('start_location_type') ?? 'Current GPS';
       });
+      await _checkConnection();
     } catch (e) {
       print('Error loading settings: $e');
+    }
+  }
+
+  Future<void> _checkConnection() async {
+    if (!_googleSyncEnabled || _googleEmail == null) {
+      if (mounted) {
+        setState(() {
+          _connectionStatus = CloudConnectionStatus.disabled;
+        });
+      }
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _connectionStatus = CloudConnectionStatus.checking;
+      });
+    }
+
+    final isConnected = await CloudSyncService.checkConnection();
+
+    if (mounted) {
+      setState(() {
+        _connectionStatus = isConnected
+            ? CloudConnectionStatus.connected
+            : CloudConnectionStatus.offline;
+      });
+    }
+  }
+
+  Color _getStatusColor() {
+    switch (_connectionStatus) {
+      case CloudConnectionStatus.disabled:
+        return const Color(0xFF8E8E93);
+      case CloudConnectionStatus.checking:
+        return const Color(0xFFF5A623);
+      case CloudConnectionStatus.offline:
+        return const Color(0xFFFF453A);
+      case CloudConnectionStatus.connected:
+        return const Color(0xFF30D158);
+    }
+  }
+
+  String _getStatusText() {
+    switch (_connectionStatus) {
+      case CloudConnectionStatus.disabled:
+        return 'Sync Disabled';
+      case CloudConnectionStatus.checking:
+        return 'Checking connection...';
+      case CloudConnectionStatus.offline:
+        return 'Offline (Using Local Cache)';
+      case CloudConnectionStatus.connected:
+        return 'Connected to Cloud Database';
     }
   }
 
@@ -59,6 +121,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() {
         _googleSyncEnabled = false;
       });
+      await _checkConnection();
     }
   }
 
@@ -97,6 +160,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         });
       }
     } catch (e) {
+      setState(() {
+        _googleSyncEnabled = false;
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -106,6 +172,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
     } finally {
+      await _checkConnection();
       if (mounted) {
         setState(() {
           _isSyncing = false;
@@ -143,6 +210,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
     } finally {
+      await _checkConnection();
       if (mounted) {
         setState(() {
           _isSyncing = false;
@@ -180,6 +248,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
     } finally {
+      await _checkConnection();
       if (mounted) {
         setState(() {
           _isSyncing = false;
@@ -461,6 +530,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     value: _googleSyncEnabled,
                     activeColor: const Color(0xFFF5A623),
                     onChanged: _toggleGoogleSync,
+                  ),
+                  const Divider(color: Color(0xFF2C2C2E), height: 1),
+                  ListTile(
+                    title: const Text('Database Connection', style: TextStyle(color: Colors.white, fontSize: 15)),
+                    leading: const Icon(Icons.cloud_queue_rounded, color: Color(0xFF8E8E93)),
+                    subtitle: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: _getStatusColor(),
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          _getStatusText(),
+                          style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 12),
+                        ),
+                      ],
+                    ),
+                    trailing: _connectionStatus == CloudConnectionStatus.checking
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF5A623)),
+                            ),
+                          )
+                        : IconButton(
+                            icon: const Icon(Icons.refresh_rounded, size: 20, color: Color(0xFF8E8E93)),
+                            onPressed: _checkConnection,
+                          ),
                   ),
                   const Divider(color: Color(0xFF2C2C2E), height: 1),
                   if (_googleEmail != null) ...[

@@ -121,4 +121,23 @@ class CloudSyncService {
       print('CloudSyncService: Error saving single receiver to Cloud Firestore: $e');
     }
   }
+
+  // Check if we can reach the cloud Firestore database
+  static Future<bool> checkConnection() async {
+    final User? user = _auth.currentUser;
+    if (user == null) return false;
+
+    try {
+      // Force fetching from server with a short timeout to verify online connection
+      await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 3));
+      return true;
+    } catch (e) {
+      print('CloudSyncService: Connection check failed: $e');
+      return false;
+    }
+  }
 }
