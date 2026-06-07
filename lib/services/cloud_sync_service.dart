@@ -131,34 +131,45 @@ class CloudSyncService {
 
     int retryCount = 0;
     const int maxRetries = 3;
-    int delaySeconds = 1;
+    int delaySeconds = 2;
 
     while (true) {
       try {
-        // Force fetching from server with a short timeout to verify online connection.
-        // We query a dummy document inside the 'receivers' subcollection because the security
-        // rules only grant access to '/users/{userId}/receivers/{receiverId}', which makes
-        // direct reads to '/users/{userId}' throw a permission-denied exception.
+        // Force a server-side read with a longer timeout.
+        // Firestore on Android needs 5-15 seconds to establish TLS on first connection.
+        // Treat a FirebaseException with code 'not-found' as SUCCESS —
+        // it means we reached the server and it responded (document just doesn't exist yet).
         await _firestore
             .collection('users')
             .doc(user.uid)
             .collection('receivers')
             .doc('connectivity_test')
             .get(const GetOptions(source: Source.server))
-            .timeout(const Duration(seconds: 3));
-        return; // Success, connected!
+            .timeout(const Duration(seconds: 15));
+        return; // Success — document found!
+      } on FirebaseException catch (e) {
+        // 'not-found' means the server responded — we ARE connected
+        if (e.code == 'not-found') {
+          return;
+        }
+        // 'unavailable' or 'deadline-exceeded' — genuine connectivity problem
+        retryCount++;
+        print('CloudSyncService: Connection check attempt $retryCount failed: $e');
+        if (retryCount >= maxRetries) {
+          rethrow;
+        }
+        await Future.delayed(Duration(seconds: delaySeconds));
+        delaySeconds *= 2;
       } catch (e) {
         retryCount++;
         print('CloudSyncService: Connection check attempt $retryCount failed: $e');
-        
         if (retryCount >= maxRetries) {
-          rethrow; // Final attempt failed, rethrow the exception
+          rethrow;
         }
-        
-        // Wait with exponential backoff before the next attempt
         await Future.delayed(Duration(seconds: delaySeconds));
         delaySeconds *= 2;
       }
     }
   }
+
 }
