@@ -128,10 +128,15 @@ class CloudSyncService {
     if (user == null) return false;
 
     try {
-      // Force fetching from server with a short timeout to verify online connection
+      // Force fetching from server with a short timeout to verify online connection.
+      // We query a dummy document inside the 'receivers' subcollection because the security
+      // rules only grant access to '/users/{userId}/receivers/{receiverId}', which makes
+      // direct reads to '/users/{userId}' throw a permission-denied exception.
       await _firestore
           .collection('users')
           .doc(user.uid)
+          .collection('receivers')
+          .doc('connectivity_test')
           .get(const GetOptions(source: Source.server))
           .timeout(const Duration(seconds: 3));
       return true;
