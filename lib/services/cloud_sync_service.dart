@@ -123,9 +123,11 @@ class CloudSyncService {
   }
 
   // Check if we can reach the cloud Firestore database
-  static Future<bool> checkConnection() async {
+  static Future<void> checkConnection() async {
     final User? user = _auth.currentUser;
-    if (user == null) return false;
+    if (user == null) {
+      throw Exception('No authenticated user.');
+    }
 
     try {
       // Force fetching from server with a short timeout to verify online connection.
@@ -139,10 +141,9 @@ class CloudSyncService {
           .doc('connectivity_test')
           .get(const GetOptions(source: Source.server))
           .timeout(const Duration(seconds: 3));
-      return true;
     } catch (e) {
       print('CloudSyncService: Connection check failed: $e');
-      return false;
+      rethrow;
     }
   }
 }

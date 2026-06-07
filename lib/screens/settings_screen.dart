@@ -27,6 +27,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isSyncing = false;
   String _startLocationType = 'Current GPS';
   CloudConnectionStatus _connectionStatus = CloudConnectionStatus.disabled;
+  String? _connectionError;
 
   @override
   void initState() {
@@ -54,6 +55,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) {
         setState(() {
           _connectionStatus = CloudConnectionStatus.disabled;
+          _connectionError = null;
         });
       }
       return;
@@ -62,17 +64,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) {
       setState(() {
         _connectionStatus = CloudConnectionStatus.checking;
+        _connectionError = null;
       });
     }
 
-    final isConnected = await CloudSyncService.checkConnection();
-
-    if (mounted) {
-      setState(() {
-        _connectionStatus = isConnected
-            ? CloudConnectionStatus.connected
-            : CloudConnectionStatus.offline;
-      });
+    try {
+      await CloudSyncService.checkConnection();
+      if (mounted) {
+        setState(() {
+          _connectionStatus = CloudConnectionStatus.connected;
+          _connectionError = null;
+        });
+      }
+    } catch (e) {
+      print('CloudSyncService: Connection check failed: $e');
+      if (mounted) {
+        setState(() {
+          _connectionStatus = CloudConnectionStatus.offline;
+          _connectionError = e.toString();
+        });
+      }
     }
   }
 
@@ -535,24 +546,68 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ListTile(
                     title: const Text('Database Connection', style: TextStyle(color: Colors.white, fontSize: 15)),
                     leading: const Icon(Icons.cloud_queue_rounded, color: Color(0xFF8E8E93)),
-                    subtitle: Row(
-                      mainAxisSize: MainAxisSize.min,
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(
-                            color: _getStatusColor(),
-                            shape: BoxShape.circle,
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: _getStatusColor(),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              _getStatusText(),
+                              style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 12),
+                            ),
+                          ],
+                        ),
+                        if (_connectionError != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            _connectionError!,
+                            style: const TextStyle(color: Color(0xFFFF453A), fontSize: 11),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          _getStatusText(),
-                          style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 12),
-                        ),
+                        ],
                       ],
                     ),
+                    onTap: _connectionError != null
+                        ? () {
+                            showDialog(
+                              context: context,
+                              builder: (context) => AlertDialog(
+                                backgroundColor: const Color(0xFF1C1C1E),
+                                title: const Text('Connection Error Details', style: TextStyle(color: Colors.white)),
+                                content: SingleChildScrollView(
+                                  child: Text(
+                                    _connectionError!,
+                                    style: const TextStyle(color: Color(0xFFFF453A)),
+                                  ),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    child: const Text('Close', style: TextStyle(color: Color(0xFF8E8E93))),
+                                    onPressed: () => Navigator.pop(context),
+                                  ),
+                                  TextButton(
+                                    child: const Text('Retry', style: TextStyle(color: Color(0xFFF5A623))),
+                                    onPressed: () {
+                                      Navigator.pop(context);
+                                      _checkConnection();
+                                    },
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
+                        : null,
                     trailing: _connectionStatus == CloudConnectionStatus.checking
                         ? const SizedBox(
                             width: 20,
