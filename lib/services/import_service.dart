@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import '../db/database_helper.dart';
 import '../models/receiver_record.dart';
 import 'geocoding_service.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart';
 
 class ImportResult {
   final int importedCount;
@@ -162,6 +163,209 @@ class ImportService {
       // Save to local SQLite and sync with Cloud Firestore
       await DatabaseHelper.instance.insertReceiver(newReceiver);
       imported++;
+    }
+
+    return ImportResult(
+      importedCount: imported,
+      duplicateCount: duplicates,
+      errorCount: errors,
+    );
+  }
+
+  /// Opens file picker and returns a list of map records parsed from PDF, or null if cancelled.
+  static Future<List<Map<String, dynamic>>?> pickAndParsePDF() async {
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf'],
+      );
+
+      if (result == null || result.files.single.path == null) {
+        return null; // User cancelled
+      }
+
+      final file = File(result.files.single.path!);
+      final List<int> bytes = await file.readAsBytes();
+
+      // Load PDF using Syncfusion PDF library
+      final PdfDocument document = PdfDocument(inputBytes: bytes);
+      
+      // Extract text from all pages
+      final String fullText = PdfTextExtractor(document).extractText();
+      
+      // Dispose document to avoid leaks
+      document.dispose();
+
+      if (fullText.isEmpty) {
+        throw Exception("The selected PDF file contains no readable text.");
+      }
+
+      // Regex to find all Tracking IDs: 4 uppercase letters followed by 10 digits
+      final RegExp trackingRegExp = RegExp(r'[A-Z]{4}\d{10}');
+      final Iterable<RegExpMatch> matches = trackingRegExp.allMatches(fullText);
+
+      if (matches.isEmpty) {
+        throw Exception("No tracking IDs (e.g. FMPC1234567890) found in the PDF.");
+      }
+
+      final List<RegExpMatch> matchList = matches.toList();
+      final List<Map<String, dynamic>> records = [];
+
+      for (int i = 0; i < matchList.length; i++) {
+        final RegExpMatch currentMatch = matchList[i];
+        final String trackingId = currentMatch.group(0)!;
+        
+        final int startIdx = currentMatch.end;
+        final int endIdx = i + 1 < matchList.length ? matchList[i + 1].start : fullText.length;
+        
+        final String detailsText = fullText.substring(startIdx, endIdx).trim();
+        records.add({
+          'tracking_id': trackingId,
+          'details': detailsText,
+        });
+      }
+
+      final List<Map<String, dynamic>> parsedRecords = [];
+
+      for (final r in records) {
+        final String trackingId = r['tracking_id'] as String;
+        final String rawDetails = r['details'] as String;
+        
+        // Clean up text spacing and replace newlines with spaces
+        final String cleanDetails = rawDetails.replaceAll(RegExp(r'\s+'), ' ');
+
+        // Date-time pattern: YYYY-MM-DD followed optionally by time, priority (P0-P4), amount, and address
+        final RegExp dtRegExp = RegExp(r'(\d{4}-\d{2}-\d{2}(?:\s?\d{2}:\d{2}:\d{2})?)\s*(P\d)\s*(\d+)\s*(.*)');
+        final RegExpMatch? dtMatch = dtRegExp.firstMatch(cleanDetails);
+
+        if (dtMatch != null) {
+          final String priority = dtMatch.group(2)!;
+          final String amountStr = dtMatch.group(3)!;
+          final String remainder = dtMatch.group(4)!;
+
+          // Extract pincode (6-digit number starting with 6) and status
+          final RegExp pincodeRegExp = RegExp(r'(6\d{5})\s*(.*)');
+          final RegExpMatch? pincodeMatch = pincodeRegExp.firstMatch(remainder);
+
+          String address = remainder;
+          String statusText = "";
+          String pincode = "";
+
+          if (pincodeMatch != null) {
+            pincode = pincodeMatch.group(1)!;
+            statusText = pincodeMatch.group(2)!.trim();
+            address = remainder.substring(0, pincodeMatch.start).trim();
+          }
+
+          // Clean up address
+          if (address.endsWith(',')) {
+            address = address.substring(0, address.length - 1).trim();
+          }
+
+          // Determine name: use first comma-separated segment, or first 2 words if no comma
+          String name = "";
+          if (address.contains(',')) {
+            name = address.split(',')[0].trim();
+          } else {
+            final List<String> words = address.split(' ');
+            name = words.length >= 2 ? "${words[0]} ${words[1]}" : address;
+          }
+
+          // Limit status code to raw text
+          if (statusText.length > 50) {
+            statusText = statusText.substring(0, 50).trim();
+          }
+
+          parsedRecords.add({
+            'id': trackingId,
+            'name': name,
+            'addressText': '$address ${pincode.isNotEmpty ? pincode : ""}'.trim(),
+            'notes': 'Priority: $priority | COD Amount: $amountStr${statusText.isNotEmpty ? ' | Status: $statusText' : ''}',
+          });
+        } else {
+          // Fallback parsing if structure differs
+          parsedRecords.add({
+            'id': trackingId,
+            'name': 'Customer $trackingId',
+            'addressText': cleanDetails.length > 100 ? cleanDetails.substring(0, 100) : cleanDetails,
+            'notes': 'Unparsed data: $cleanDetails',
+          });
+        }
+      }
+
+      return parsedRecords;
+    } catch (e) {
+      print("PDF Parser Error: $e");
+      rethrow;
+    }
+  }
+
+  /// Process the parsed PDF records, geocode if needed, and save to database.
+  static Future<ImportResult> processPDFImport({
+    required List<Map<String, dynamic>> records,
+    required Function(String status, double progress) onProgress,
+  }) async {
+    int imported = 0;
+    int duplicates = 0;
+    int errors = 0;
+
+    final totalRecords = records.length;
+
+    for (int i = 0; i < records.length; i++) {
+      final r = records[i];
+      final String trackingId = r['id'] as String;
+      final String name = r['name'] as String;
+      final String address = r['addressText'] as String;
+      final String notes = r['notes'] as String;
+
+      final currentProgress = (i + 1) / totalRecords;
+      onProgress("Checking duplicate: $trackingId", currentProgress);
+
+      // Check for exact duplicate in DB (by AWB / tracking ID primary key)
+      final existing = await DatabaseHelper.instance.getReceiver(trackingId);
+      if (existing != null) {
+        duplicates++;
+        continue;
+      }
+
+      onProgress("Geocoding location: $name", currentProgress);
+      
+      double? lat;
+      double? lng;
+      bool isVerified = true;
+
+      // Geocode the address text
+      final geocodeResult = await GeocodingService.geocodeAddress(address);
+      if (geocodeResult != null) {
+        lat = geocodeResult.latitude;
+        lng = geocodeResult.longitude;
+      } else {
+        // Fallback to 0.0, 0.0 and mark as unverified
+        lat = 0.0;
+        lng = 0.0;
+        isVerified = false;
+      }
+
+      // Small delay to respect Google Geocoding API limits
+      await Future.delayed(const Duration(milliseconds: 150));
+
+      final newReceiver = ReceiverRecord(
+        id: trackingId, // Use Tracking ID as primary key
+        name: name,
+        addressText: address,
+        latitude: lat,
+        longitude: lng,
+        notes: notes,
+        isVerified: isVerified,
+      );
+
+      try {
+        await DatabaseHelper.instance.insertReceiver(newReceiver);
+        imported++;
+      } catch (e) {
+        print("Error inserting receiver $trackingId: $e");
+        errors++;
+      }
     }
 
     return ImportResult(

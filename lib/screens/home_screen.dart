@@ -5,6 +5,7 @@ import '../models/package_item.dart';
 import '../models/receiver_record.dart';
 import '../models/delivery_stop.dart';
 import 'ocr_scan_screen.dart';
+import 'barcode_scan_screen.dart';
 import 'route_map_screen.dart';
 import 'packing_order_screen.dart';
 import 'receivers_book_screen.dart';
@@ -330,11 +331,33 @@ class _HomeScreenState extends State<HomeScreen> {
             width: double.infinity,
             height: 56,
             child: ElevatedButton.icon(
-              icon: const Icon(Icons.camera_alt_outlined, color: Colors.black),
-              label: const Text('📷 SCAN PACKAGE LABELS', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
+              icon: const Icon(Icons.qr_code_scanner, color: Colors.black),
+              label: const Text('📷 SCAN AWB BARCODES', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFF5A623),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+              ),
+              onPressed: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => BarcodeScanScreen(sessionId: _activeSession!.id),
+                  ),
+                );
+                _loadSessionData(); // reload on return
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: OutlinedButton.icon(
+              icon: const Icon(Icons.text_fields, color: Color(0xFFF5A623)),
+              label: const Text('📷 SCAN LABEL TEXT (OCR)', style: TextStyle(color: Colors.white)),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Color(0xFFF5A623)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
               ),
               onPressed: () async {
                 await Navigator.push(

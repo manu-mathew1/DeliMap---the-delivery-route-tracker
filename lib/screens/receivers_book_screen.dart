@@ -201,6 +201,148 @@ class _ReceiversBookScreenState extends State<ReceiversBookScreen> {
     }
   }
 
+  Future<void> _importPDF() async {
+    try {
+      final records = await ImportService.pickAndParsePDF();
+      if (records == null) return; // Cancelled
+
+      // Check how many records actually need geocoding (are not duplicates)
+      int newCount = 0;
+      for (final r in records) {
+        final existing = await DatabaseHelper.instance.getReceiver(r['id'] as String);
+        if (existing == null) {
+          newCount++;
+        }
+      }
+
+      if (newCount == 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('All entries in this PDF runsheet are already in the directory.'),
+            backgroundColor: Color(0xFF30D158),
+          ),
+        );
+        return;
+      }
+
+      if (newCount > 10) {
+        final confirm = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFF1C1C1E),
+            title: const Text('Confirm Geocoding', style: TextStyle(color: Colors.white)),
+            content: Text(
+              'There are $newCount new entries in this runsheet that will be geocoded using the Google Geocoding API. '
+              'This may take some time and consume API quota. Proceed?',
+              style: const TextStyle(color: Color(0xFF8E8E93)),
+            ),
+            actions: [
+              TextButton(
+                child: const Text('Cancel', style: TextStyle(color: Color(0xFF8E8E93))),
+                onPressed: () => Navigator.pop(context, false),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFF5A623)),
+                child: const Text('Proceed', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                onPressed: () => Navigator.pop(context, true),
+              ),
+            ],
+          ),
+        );
+        if (confirm != true) return;
+      }
+
+      // Show progress overlay
+      double progress = 0.0;
+      String status = "Initializing import...";
+      StateSetter? dialogSetState;
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1C1C1E),
+            content: StatefulBuilder(
+              builder: (context, setDialogState) {
+                dialogSetState = setDialogState;
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Importing PDF Runsheet',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                    const SizedBox(height: 20),
+                    LinearProgressIndicator(
+                      value: progress,
+                      color: const Color(0xFFF5A623),
+                      backgroundColor: const Color(0xFF2C2C2E),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '${(progress * 100).toStringAsFixed(0)}%',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      status,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 12),
+                    ),
+                  ],
+                );
+              },
+            ),
+          );
+        },
+      );
+
+      try {
+        final result = await ImportService.processPDFImport(
+          records: records,
+          onProgress: (newStatus, newProgress) {
+            if (dialogSetState != null) {
+              dialogSetState!(() {
+                status = newStatus;
+                progress = newProgress;
+              });
+            }
+          },
+        );
+
+        Navigator.pop(context); // Dismiss progress dialog
+        _loadReceivers();
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Import complete! Imported ${result.importedCount} new, '
+              'skipped ${result.duplicateCount} duplicates, '
+              'errors: ${result.errorCount}.',
+            ),
+            backgroundColor: const Color(0xFF30D158),
+          ),
+        );
+      } catch (e) {
+        Navigator.pop(context); // Dismiss progress dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Import failed: $e'),
+            backgroundColor: const Color(0xFFFF453A),
+          ),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to parse PDF: $e'),
+          backgroundColor: const Color(0xFFFF453A),
+        ),
+      );
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -434,6 +576,11 @@ class _ReceiversBookScreenState extends State<ReceiversBookScreen> {
                 ),
                 Row(
                   children: [
+                    IconButton(
+                      icon: const Icon(Icons.picture_as_pdf, color: Color(0xFFF5A623), size: 26),
+                      tooltip: 'Import PDF Runsheet',
+                      onPressed: _importPDF,
+                    ),
                     IconButton(
                       icon: const Icon(Icons.upload_file, color: Color(0xFFF5A623), size: 26),
                       tooltip: 'Import CSV',
