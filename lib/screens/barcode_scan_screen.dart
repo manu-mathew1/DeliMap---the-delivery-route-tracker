@@ -5,6 +5,7 @@ import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart
 import '../db/database_helper.dart';
 import '../models/package_item.dart';
 import '../models/receiver_record.dart';
+import '../services/geocoding_service.dart';
 import 'ocr_scan_screen.dart';
 
 enum ScanFeedbackType { success, duplicate, notFound }
@@ -276,6 +277,8 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
   void _showManualEntrySheet(String barcodeValue) {
     final nameController = TextEditingController();
     final addressController = TextEditingController();
+    bool isSaving = false;
+    PackageType _manualPackageType = PackageType.delivery; // reset manual package type
 
     showModalBottomSheet(
       context: context,
@@ -289,6 +292,7 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
       ),
       builder: (context) => StatefulBuilder(
         builder: (context, setModalState) {
+
           return Padding(
             padding: EdgeInsets.only(
               left: 24,
@@ -317,6 +321,7 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
                 const SizedBox(height: 8),
                 TextField(
                   controller: nameController,
+                  enabled: !isSaving,
                   style: const TextStyle(color: Colors.white, fontSize: 16),
                   decoration: InputDecoration(
                     fillColor: const Color(0xFF2C2C2E),
@@ -330,6 +335,7 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
                 const SizedBox(height: 8),
                 TextField(
                   controller: addressController,
+                  enabled: !isSaving,
                   maxLines: 3,
                   style: const TextStyle(color: Colors.white, fontSize: 14),
                   decoration: InputDecoration(
@@ -428,7 +434,7 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
                       backgroundColor: const Color(0xFFF5A623),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
                     ),
-                    onPressed: () async {
+                    onPressed: isSaving ? null : () async {
                       final nameText = nameController.text.trim();
                       final addressText = addressController.text.trim();
 
@@ -439,31 +445,128 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
                         return;
                       }
 
-                      final newPkg = PackageItem(
-                        id: barcodeValue, // Use tracking AWB ID as key
-                        sessionId: widget.sessionId,
-                        name: nameText,
-                        addressText: addressText,
-                        status: PackageStatus.pending,
-                        scannedAt: DateTime.now(),
-                        notes: 'Manually Entered',
-                        type: _manualPackageType,
-                      );
+                      setModalState(() {
+                        isSaving = true;
+                      });
 
-                      await DatabaseHelper.instance.insertPackage(newPkg);
-                      Navigator.pop(context); // Pop sheet
+                      try {
+                        double? lat;
+                        double? lng;
+                        String? resolvedReceiverId;
 
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('✅ Added package manually.'),
-                          backgroundColor: Color(0xFF30D158),
-                        ),
-                      );
+                        // Geocode address
+                        final geocodeResult = await GeocodingService.geocodeAddress(addressText);
+                        if (geocodeResult != null) {
+                          lat = geocodeResult.latitude;
+                          lng = geocodeResult.longitude;
+
+                          // Check proximity match in master database
+                          final nearbyReceiver = await DatabaseHelper.instance.findNearbyReceiverMatch(
+                            name: nameText,
+                            latitude: lat,
+                            longitude: lng,
+                            maxDistanceMeters: 1000.0,
+                            minNameSimilarity: 0.60,
+                          );
+
+                          if (nearbyReceiver != null) {
+                            resolvedReceiverId = nearbyReceiver.id;
+                            lat = nearbyReceiver.latitude;
+                            lng = nearbyReceiver.longitude;
+                            print('Manual Entry: Resolved $barcodeValue via proximity to master receiver: ${nearbyReceiver.name} ($lat, $lng)');
+                          } else {
+                            // Check proximity match in current session packages
+                            final List<PackageItem> activePackages = await DatabaseHelper.instance.getPackagesInSession(widget.sessionId);
+                            PackageItem? proximitySessionMatch;
+                            double bestSessionSim = 0.0;
+                            double closestSessionDist = double.maxFinite;
+
+                            for (final p in activePackages) {
+                              if (p.latitude != null && p.longitude != null && p.latitude != 0.0 && p.longitude != 0.0) {
+                                final dist = DatabaseHelper.instance.calculateDistance(lat!, lng!, p.latitude!, p.longitude!);
+                                if (dist <= 1000.0) {
+                                  final nameSim = DatabaseHelper.instance.calculateNameSimilarity(nameText, p.name);
+                                  if (nameSim >= 0.60) {
+                                    if (nameSim > bestSessionSim) {
+                                      bestSessionSim = nameSim;
+                                      proximitySessionMatch = p;
+                                      closestSessionDist = dist;
+                                    } else if (nameSim == bestSessionSim) {
+                                      if (dist < closestSessionDist) {
+                                        proximitySessionMatch = p;
+                                        closestSessionDist = dist;
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+
+                            if (proximitySessionMatch != null) {
+                              resolvedReceiverId = proximitySessionMatch.receiverId;
+                              lat = proximitySessionMatch.latitude;
+                              lng = proximitySessionMatch.longitude;
+                              print('Manual Entry: Grouping $barcodeValue with session package ${proximitySessionMatch.name} via proximity ($closestSessionDist meters)');
+                            } else {
+                              resolvedReceiverId = barcodeValue;
+                            }
+                          }
+                        } else {
+                          lat = 0.0;
+                          lng = 0.0;
+                          resolvedReceiverId = barcodeValue;
+                        }
+
+                        final newPkg = PackageItem(
+                          id: barcodeValue, // Use tracking AWB ID as key
+                          sessionId: widget.sessionId,
+                          name: nameText,
+                          addressText: addressText,
+                          status: PackageStatus.pending,
+                          scannedAt: DateTime.now(),
+                          receiverId: resolvedReceiverId,
+                          latitude: lat,
+                          longitude: lng,
+                          notes: 'Manually Entered',
+                          type: _manualPackageType,
+                        );
+
+                        await DatabaseHelper.instance.insertPackage(newPkg);
+                        Navigator.pop(context); // Pop sheet
+
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('✅ Added package manually.'),
+                            backgroundColor: Color(0xFF30D158),
+                          ),
+                        );
+                      } catch (e) {
+                        print('Manual Entry Error: $e');
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Error saving package: $e'),
+                            backgroundColor: const Color(0xFFFF453A),
+                          ),
+                        );
+                      } finally {
+                        setModalState(() {
+                          isSaving = false;
+                        });
+                      }
                     },
-                    child: const Text(
-                      'CONFIRM & SAVE',
-                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.black),
-                    ),
+                    child: isSaving
+                        ? const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(
+                              color: Colors.black,
+                              strokeWidth: 2.5,
+                            ),
+                          )
+                        : const Text(
+                            'CONFIRM & SAVE',
+                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.black),
+                          ),
                   ),
                 ),
               ],

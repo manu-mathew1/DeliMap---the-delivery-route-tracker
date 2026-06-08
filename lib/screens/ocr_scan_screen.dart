@@ -308,12 +308,76 @@ class _OcrScanScreenState extends State<OcrScanScreen> {
     );
 
     if (geocodeResult != null) {
+      final double lat = geocodeResult.latitude;
+      final double lng = geocodeResult.longitude;
+
+      // Perform proximity match against master directory
+      final nearbyReceiver = await DatabaseHelper.instance.findNearbyReceiverMatch(
+        name: package.name,
+        latitude: lat,
+        longitude: lng,
+        maxDistanceMeters: 1000.0,
+        minNameSimilarity: 0.60,
+      );
+
+      String? resolvedReceiverId;
+      double finalLat = lat;
+      double finalLng = lng;
+      String? finalNotes = package.notes;
+
+      if (nearbyReceiver != null) {
+        resolvedReceiverId = nearbyReceiver.id;
+        finalLat = nearbyReceiver.latitude ?? lat;
+        finalLng = nearbyReceiver.longitude ?? lng;
+        finalNotes = nearbyReceiver.notes.isNotEmpty ? nearbyReceiver.notes : package.notes;
+        print('Background Resolve: Resolved ${package.name} via proximity match with master directory: ${nearbyReceiver.name} ($finalLat, $finalLng)');
+      } else {
+        // Search current session packages for proximity match
+        final List<PackageItem> activePackages = await DatabaseHelper.instance.getPackagesInSession(package.sessionId);
+        PackageItem? proximitySessionMatch;
+        double bestSessionSim = 0.0;
+        double closestSessionDist = double.maxFinite;
+
+        for (final p in activePackages) {
+          if (p.id == package.id) continue; // Skip self
+          if (p.latitude != null && p.longitude != null && p.latitude != 0.0 && p.longitude != 0.0) {
+            final dist = DatabaseHelper.instance.calculateDistance(lat, lng, p.latitude!, p.longitude!);
+            if (dist <= 1000.0) {
+              final nameSim = DatabaseHelper.instance.calculateNameSimilarity(package.name, p.name);
+              if (nameSim >= 0.60) {
+                if (nameSim > bestSessionSim) {
+                  bestSessionSim = nameSim;
+                  proximitySessionMatch = p;
+                  closestSessionDist = dist;
+                } else if (nameSim == bestSessionSim) {
+                  if (dist < closestSessionDist) {
+                    proximitySessionMatch = p;
+                    closestSessionDist = dist;
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        if (proximitySessionMatch != null) {
+          resolvedReceiverId = proximitySessionMatch.receiverId;
+          finalLat = proximitySessionMatch.latitude ?? lat;
+          finalLng = proximitySessionMatch.longitude ?? lng;
+          print('Background Resolve: Grouping ${package.name} with session package ${proximitySessionMatch.name} via proximity match ($closestSessionDist meters)');
+        } else {
+          resolvedReceiverId = package.receiverId ?? package.id;
+        }
+      }
+
       final updatedPkg = package.copyWith(
-        latitude: geocodeResult.latitude,
-        longitude: geocodeResult.longitude,
+        receiverId: resolvedReceiverId,
+        latitude: finalLat,
+        longitude: finalLng,
+        notes: finalNotes,
       );
       await DatabaseHelper.instance.updatePackage(updatedPkg);
-      print('Background Resolve: Google Geocoded successfully for ${package.name}: ${geocodeResult.latitude}, ${geocodeResult.longitude}');
+      print('Background Resolve: Google Geocoded successfully for ${package.name}: $finalLat, $finalLng');
     } else {
       print('Background Resolve: Geocoding failed for ${package.name}');
     }

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:csv/csv.dart';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:uuid/uuid.dart';
 import '../db/database_helper.dart';
@@ -446,11 +447,64 @@ class ImportService {
           if (geocodeResult != null) {
             lat = geocodeResult.latitude;
             lng = geocodeResult.longitude;
+
+            // Perform proximity matching with 1km radius and 60% name similarity
+            final nearbyReceiver = await DatabaseHelper.instance.findNearbyReceiverMatch(
+              name: parsedName,
+              latitude: lat,
+              longitude: lng,
+              maxDistanceMeters: 1000.0,
+              minNameSimilarity: 0.60,
+            );
+
+            if (nearbyReceiver != null) {
+              finalName = nearbyReceiver.name;
+              lat = nearbyReceiver.latitude;
+              lng = nearbyReceiver.longitude;
+              resolvedReceiverId = nearbyReceiver.id;
+              print("Runsheet PDF: Resolved $trackingId via proximity match with master directory: $finalName ($lat, $lng)");
+            } else {
+              // No master directory proximity match. Check activePackages in current session
+              PackageItem? proximitySessionMatch;
+              double bestSessionSim = 0.0;
+              double closestSessionDist = double.maxFinite;
+
+              for (final p in activePackages) {
+                if (p.latitude != null && p.longitude != null && p.latitude != 0.0 && p.longitude != 0.0) {
+                  final dist = DatabaseHelper.instance.calculateDistance(lat, lng, p.latitude!, p.longitude!);
+                  if (dist <= 1000.0) {
+                    final nameSim = DatabaseHelper.instance.calculateNameSimilarity(parsedName, p.name);
+                    if (nameSim >= 0.60) {
+                      if (nameSim > bestSessionSim) {
+                        bestSessionSim = nameSim;
+                        proximitySessionMatch = p;
+                        closestSessionDist = dist;
+                      } else if (nameSim == bestSessionSim) {
+                        if (dist < closestSessionDist) {
+                          proximitySessionMatch = p;
+                          closestSessionDist = dist;
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+
+              if (proximitySessionMatch != null) {
+                finalName = proximitySessionMatch.name;
+                lat = proximitySessionMatch.latitude;
+                lng = proximitySessionMatch.longitude;
+                resolvedReceiverId = proximitySessionMatch.receiverId;
+                print("Runsheet PDF: Grouping $trackingId with existing session package $finalName via proximity match ($closestSessionDist meters)");
+              } else {
+                resolvedReceiverId = trackingId; // Truly new, default to tracking ID
+              }
+            }
           } else {
             lat = 0.0;
             lng = 0.0;
+            resolvedReceiverId = trackingId;
           }
-          resolvedReceiverId = trackingId; // Default to tracking ID if new
           // Small delay to respect Google Geocoding API limits
           await Future.delayed(const Duration(milliseconds: 150));
         }

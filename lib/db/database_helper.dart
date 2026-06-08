@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import '../models/receiver_record.dart';
@@ -221,6 +222,94 @@ class DatabaseHelper {
         .map((s) => s.trim())
         .where((s) => s.length > 2 && s != 'india') // ignore noise words
         .toSet();
+  }
+
+  // Calculate distance between two coordinates using the Haversine formula
+  double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const double p = 0.017453292519943295; // Math.PI / 180
+    final double a = 0.5 - cos((lat2 - lat1) * p) / 2 +
+        cos(lat1 * p) * cos(lat2 * p) *
+        (1 - cos((lon2 - lon1) * p)) / 2;
+    return 12742 * asin(sqrt(a)) * 1000; // Returns distance in meters
+  }
+
+  // Token-based Jaccard similarity for names
+  double calculateNameSimilarity(String name1, String name2) {
+    final Set<String> tokens1 = tokenizeName(name1);
+    final Set<String> tokens2 = tokenizeName(name2);
+    if (tokens1.isEmpty || tokens2.isEmpty) return 0.0;
+
+    final intersection = tokens1.intersection(tokens2);
+    final union = tokens1.union(tokens2);
+    return intersection.length / union.length;
+  }
+
+  Set<String> tokenizeName(String name) {
+    final clean = name.toLowerCase().replaceAll(RegExp('[,.\\-/()\'"]'), ' ');
+    final ignoreList = {
+      'mr', 'mrs', 'ms', 'miss', 'dr', 'prof', 'shri', 'smt', 'shree',
+      'house', 'villa', 'home', 'h', 'ho', 'co', 'care', 'of'
+    };
+    return clean.split(RegExp(r'\s+'))
+        .map((w) => w.trim())
+        .where((w) => w.length > 1 && !ignoreList.contains(w))
+        .toSet();
+  }
+
+  // Find a matching receiver record within maxDistanceMeters that has name similarity >= minNameSimilarity.
+  // Returns the best matching receiver, or null if none found.
+  Future<ReceiverRecord?> findNearbyReceiverMatch({
+    required String name,
+    required double latitude,
+    required double longitude,
+    double maxDistanceMeters = 1000.0,
+    double minNameSimilarity = 0.60,
+  }) async {
+    final all = await getAllReceivers();
+    ReceiverRecord? bestMatch;
+    double bestNameSim = 0.0;
+    double closestDistance = double.maxFinite;
+
+    final double latRange = maxDistanceMeters / 111000.0; // 1 degree lat is ~111km
+    final double cosLat = cos(latitude * 0.017453292519943295).abs();
+    final double lngRange = cosLat > 0.1 ? (maxDistanceMeters / (111000.0 * cosLat)) : 0.5;
+
+    for (var receiver in all) {
+      if (receiver.latitude == null || receiver.longitude == null ||
+          receiver.latitude == 0.0 || receiver.longitude == 0.0) {
+        continue;
+      }
+
+      // Bounding box filter (fast check)
+      if ((receiver.latitude! - latitude).abs() > latRange ||
+          (receiver.longitude! - longitude).abs() > lngRange) {
+        continue;
+      }
+
+      final distance = calculateDistance(
+        latitude,
+        longitude,
+        receiver.latitude!,
+        receiver.longitude!,
+      );
+
+      if (distance <= maxDistanceMeters) {
+        final nameSim = calculateNameSimilarity(name, receiver.name);
+        if (nameSim >= minNameSimilarity) {
+          if (nameSim > bestNameSim) {
+            bestNameSim = nameSim;
+            bestMatch = receiver;
+            closestDistance = distance;
+          } else if (nameSim == bestNameSim) {
+            if (distance < closestDistance) {
+              bestMatch = receiver;
+              closestDistance = distance;
+            }
+          }
+        }
+      }
+    }
+    return bestMatch;
   }
 
   // ==========================================

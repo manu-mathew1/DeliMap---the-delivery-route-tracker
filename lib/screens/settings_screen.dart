@@ -705,7 +705,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Column(
                 children: [
                   Text(
-                    'DeliMap v1.8.3',
+                    'DeliMap v1.8.4',
                     style: TextStyle(color: Color(0xFF8E8E93), fontSize: 14, fontWeight: FontWeight.bold),
                   ),
                   SizedBox(height: 4),
