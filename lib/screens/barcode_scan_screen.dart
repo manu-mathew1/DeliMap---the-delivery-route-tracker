@@ -23,6 +23,7 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
   bool _isPermissionGranted = false;
   bool _isProcessing = false;
   bool _flashOn = false;
+  PackageType _manualPackageType = PackageType.delivery;
 
   @override
   void initState() {
@@ -177,25 +178,6 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
       return;
     }
 
-    // 3. Check if duplicate by receiver ID to avoid double-adding the same customer
-    final isDuplicate = activePackages.any((p) => p.receiverId == receiver.id);
-
-    if (isDuplicate) {
-      _playFeedback(ScanFeedbackType.duplicate);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Duplicate: Package for ${receiver.name} is already in the runsheet.'),
-            backgroundColor: const Color(0xFFFF9F0A),
-          ),
-        );
-      }
-      setState(() {
-        _isProcessing = false;
-      });
-      return;
-    }
-
     // 4. Add package to local SQLite runsheet
     final newPkg = PackageItem(
       id: barcodeValue, // Use tracking ID as the package primary key
@@ -305,104 +287,189 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
           topRight: Radius.circular(20),
         ),
       ),
-      builder: (context) => Padding(
-        padding: EdgeInsets.only(
-          left: 24,
-          right: 24,
-          top: 24,
-          bottom: MediaQuery.of(context).viewInsets.bottom + 32,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) {
+          return Padding(
+            padding: EdgeInsets.only(
+              left: 24,
+              right: 24,
+              top: 24,
+              bottom: MediaQuery.of(context).viewInsets.bottom + 32,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.edit, color: Color(0xFFF5A623), size: 24),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Manual Entry: $barcodeValue',
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                Row(
+                  children: [
+                    const Icon(Icons.edit, color: Color(0xFFF5A623), size: 24),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Manual Entry: $barcodeValue',
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                const Text('BUYER NAME', style: TextStyle(color: Color(0xFF8E8E93), fontSize: 10, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: nameController,
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                  decoration: InputDecoration(
+                    fillColor: const Color(0xFF2C2C2E),
+                    filled: true,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text('DELIVERY ADDRESS', style: TextStyle(color: Color(0xFF8E8E93), fontSize: 10, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: addressController,
+                  maxLines: 3,
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  decoration: InputDecoration(
+                    fillColor: const Color(0xFF2C2C2E),
+                    filled: true,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text('PACKAGE TYPE', style: TextStyle(color: Color(0xFF8E8E93), fontSize: 10, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () {
+                          setModalState(() {
+                            _manualPackageType = PackageType.delivery;
+                          });
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          decoration: BoxDecoration(
+                            color: _manualPackageType == PackageType.delivery
+                                ? const Color(0xFF0A84FF).withOpacity(0.15)
+                                : const Color(0xFF2C2C2E),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: _manualPackageType == PackageType.delivery
+                                  ? const Color(0xFF0A84FF)
+                                  : Colors.transparent,
+                              width: 1,
+                            ),
+                          ),
+                          child: Center(
+                            child: Text(
+                              'DELIVERY',
+                              style: TextStyle(
+                                color: _manualPackageType == PackageType.delivery
+                                    ? const Color(0xFF0A84FF)
+                                    : Colors.white70,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () {
+                          setModalState(() {
+                            _manualPackageType = PackageType.pickup;
+                          });
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          decoration: BoxDecoration(
+                            color: _manualPackageType == PackageType.pickup
+                                ? const Color(0xFFBF5AF2).withOpacity(0.15)
+                                : const Color(0xFF2C2C2E),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: _manualPackageType == PackageType.pickup
+                                  ? const Color(0xFFBF5AF2)
+                                  : Colors.transparent,
+                              width: 1,
+                            ),
+                          ),
+                          child: Center(
+                            child: Text(
+                              'PICKUP',
+                              style: TextStyle(
+                                color: _manualPackageType == PackageType.pickup
+                                    ? const Color(0xFFBF5AF2)
+                                    : Colors.white70,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFF5A623),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
+                    ),
+                    onPressed: () async {
+                      final nameText = nameController.text.trim();
+                      final addressText = addressController.text.trim();
+
+                      if (nameText.isEmpty || addressText.isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Name and Address cannot be empty.')),
+                        );
+                        return;
+                      }
+
+                      final newPkg = PackageItem(
+                        id: barcodeValue, // Use tracking AWB ID as key
+                        sessionId: widget.sessionId,
+                        name: nameText,
+                        addressText: addressText,
+                        status: PackageStatus.pending,
+                        scannedAt: DateTime.now(),
+                        notes: 'Manually Entered',
+                        type: _manualPackageType,
+                      );
+
+                      await DatabaseHelper.instance.insertPackage(newPkg);
+                      Navigator.pop(context); // Pop sheet
+
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('✅ Added package manually.'),
+                          backgroundColor: Color(0xFF30D158),
+                        ),
+                      );
+                    },
+                    child: const Text(
+                      'CONFIRM & SAVE',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.black),
+                    ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            const Text('BUYER NAME', style: TextStyle(color: Color(0xFF8E8E93), fontSize: 10, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            TextField(
-              controller: nameController,
-              style: const TextStyle(color: Colors.white, fontSize: 16),
-              decoration: InputDecoration(
-                fillColor: const Color(0xFF2C2C2E),
-                filled: true,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text('DELIVERY ADDRESS', style: TextStyle(color: Color(0xFF8E8E93), fontSize: 10, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            TextField(
-              controller: addressController,
-              maxLines: 3,
-              style: const TextStyle(color: Colors.white, fontSize: 14),
-              decoration: InputDecoration(
-                fillColor: const Color(0xFF2C2C2E),
-                filled: true,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              ),
-            ),
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFF5A623),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
-                ),
-                onPressed: () async {
-                  final nameText = nameController.text.trim();
-                  final addressText = addressController.text.trim();
-
-                  if (nameText.isEmpty || addressText.isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Name and Address cannot be empty.')),
-                    );
-                    return;
-                  }
-
-                  final newPkg = PackageItem(
-                    id: barcodeValue, // Use tracking AWB ID as key
-                    sessionId: widget.sessionId,
-                    name: nameText,
-                    addressText: addressText,
-                    status: PackageStatus.pending,
-                    scannedAt: DateTime.now(),
-                    notes: 'Manually Entered',
-                  );
-
-                  await DatabaseHelper.instance.insertPackage(newPkg);
-                  Navigator.pop(context); // Pop sheet
-
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('✅ Added package manually.'),
-                      backgroundColor: Color(0xFF30D158),
-                    ),
-                  );
-                },
-                child: const Text(
-                  'CONFIRM & SAVE',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.black),
-                ),
-              ),
-            ),
-          ],
-        ),
+          );
+        }
       ),
     );
   }

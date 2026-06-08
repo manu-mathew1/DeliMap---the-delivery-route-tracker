@@ -22,6 +22,7 @@ class _OcrScanScreenState extends State<OcrScanScreen> {
   bool _isPermissionGranted = false;
   bool _isProcessing = false;
   bool _showConfirmCard = false;
+  PackageType _ocrPackageType = PackageType.delivery;
 
   final TextEditingController _nameEditController = TextEditingController();
   final TextEditingController _addressEditController = TextEditingController();
@@ -206,6 +207,7 @@ class _OcrScanScreenState extends State<OcrScanScreen> {
       status: PackageStatus.pending,
       scannedAt: DateTime.now(),
       notes: '',
+      type: _ocrPackageType,
     );
 
     // Insert package into SQLite database
@@ -216,6 +218,7 @@ class _OcrScanScreenState extends State<OcrScanScreen> {
 
     setState(() {
       _showConfirmCard = false;
+      _ocrPackageType = PackageType.delivery;
       _nameEditController.clear();
       _addressEditController.clear();
     });
@@ -490,6 +493,85 @@ class _OcrScanScreenState extends State<OcrScanScreen> {
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             ),
+          ),
+          const Text('PACKAGE TYPE', style: TextStyle(color: Color(0xFF8E8E93), fontSize: 10, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _ocrPackageType = PackageType.delivery;
+                    });
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(
+                      color: _ocrPackageType == PackageType.delivery
+                          ? const Color(0xFF0A84FF).withOpacity(0.15)
+                          : const Color(0xFF2C2C2E),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: _ocrPackageType == PackageType.delivery
+                            ? const Color(0xFF0A84FF)
+                            : Colors.transparent,
+                        width: 1,
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(
+                        'DELIVERY',
+                        style: TextStyle(
+                          color: _ocrPackageType == PackageType.delivery
+                              ? const Color(0xFF0A84FF)
+                              : Colors.white70,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _ocrPackageType = PackageType.pickup;
+                    });
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(
+                      color: _ocrPackageType == PackageType.pickup
+                          ? const Color(0xFFBF5AF2).withOpacity(0.15)
+                          : const Color(0xFF2C2C2E),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: _ocrPackageType == PackageType.pickup
+                            ? const Color(0xFFBF5AF2)
+                            : Colors.transparent,
+                        width: 1,
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(
+                        'PICKUP',
+                        style: TextStyle(
+                          color: _ocrPackageType == PackageType.pickup
+                              ? const Color(0xFFBF5AF2)
+                              : Colors.white70,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 24),
           SizedBox(
