@@ -12,7 +12,7 @@ void main() async {
     );
 
     // Configure Firestore for reliable connectivity on mobile
-    FirebaseFirestore.instance.settings = const Settings(
+    FirebaseFirestore.instanceFor(app: Firebase.app(), databaseId: 'default').settings = const Settings(
       persistenceEnabled: true,
       cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
     );

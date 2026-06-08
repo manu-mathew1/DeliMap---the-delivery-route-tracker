@@ -1,10 +1,11 @@
+import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../db/database_helper.dart';
 import '../models/receiver_record.dart';
 
 class CloudSyncService {
-  static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  static final FirebaseFirestore _firestore = FirebaseFirestore.instanceFor(app: Firebase.app(), databaseId: 'default');
   static final FirebaseAuth _auth = FirebaseAuth.instance;
 
   // Perform a full bidirectional synchronization
