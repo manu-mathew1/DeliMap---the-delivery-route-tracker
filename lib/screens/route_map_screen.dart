@@ -154,6 +154,8 @@ class _RouteMapScreenState extends State<RouteMapScreen> {
       double hue = BitmapDescriptor.hueRed; // default
       if (isDelivered) {
         hue = BitmapDescriptor.hueGreen; // completed
+      } else if (stop.packages.any((p) => p.type == PackageType.pickup)) {
+        hue = BitmapDescriptor.hueViolet; // pickup (violet)
       } else if (isCurrent) {
         hue = BitmapDescriptor.hueOrange; // current/amber
       } else if (stop.packages.any((p) => p.receiverId == null)) {
@@ -389,6 +391,49 @@ class _RouteMapScreenState extends State<RouteMapScreen> {
     );
   }
 
+  Widget _buildStopTypeBadge(DeliveryStop stop) {
+    final hasDelivery = stop.packages.any((p) => p.type == PackageType.delivery);
+    final hasPickup = stop.packages.any((p) => p.type == PackageType.pickup);
+
+    Color color;
+    String label;
+    IconData icon;
+
+    if (hasDelivery && hasPickup) {
+      color = const Color(0xFFFF9F0A); // Orange
+      label = 'MIXED';
+      icon = Icons.swap_horiz_rounded;
+    } else if (hasPickup) {
+      color = const Color(0xFFBF5AF2); // Purple
+      label = 'PICKUP';
+      icon = Icons.call_received_rounded;
+    } else {
+      color = const Color(0xFF0A84FF); // Blue
+      label = 'DELIVERY';
+      icon = Icons.local_shipping_rounded;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color, width: 0.5),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 10),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (widget.activeSession == null) {
@@ -465,9 +510,15 @@ class _RouteMapScreenState extends State<RouteMapScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      'NEXT STOP (Stop ${stopIndex + 1})',
-                      style: const TextStyle(color: Color(0xFFF5A623), fontSize: 12, fontWeight: FontWeight.bold),
+                    Row(
+                      children: [
+                        Text(
+                          'NEXT STOP (Stop ${stopIndex + 1})',
+                          style: const TextStyle(color: Color(0xFFF5A623), fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(width: 8),
+                        _buildStopTypeBadge(currentStop),
+                      ],
                     ),
                     if (isKnown)
                       const Row(

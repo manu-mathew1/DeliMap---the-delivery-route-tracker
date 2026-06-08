@@ -1,4 +1,5 @@
 enum PackageStatus { pending, delivered, failed }
+enum PackageType { delivery, pickup }
 
 class PackageItem {
   final String id;
@@ -12,6 +13,7 @@ class PackageItem {
   final double? latitude;    // Temporary or resolved GPS latitude
   final double? longitude;   // Temporary or resolved GPS longitude
   final String notes;
+  final PackageType type;
 
   PackageItem({
     required this.id,
@@ -25,6 +27,7 @@ class PackageItem {
     this.latitude,
     this.longitude,
     this.notes = '',
+    this.type = PackageType.delivery,
   });
 
   PackageItem copyWith({
@@ -39,6 +42,7 @@ class PackageItem {
     double? latitude,
     double? longitude,
     String? notes,
+    PackageType? type,
   }) {
     return PackageItem(
       id: id ?? this.id,
@@ -52,6 +56,7 @@ class PackageItem {
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
       notes: notes ?? this.notes,
+      type: type ?? this.type,
     );
   }
 
@@ -68,6 +73,7 @@ class PackageItem {
       'latitude': latitude,
       'longitude': longitude,
       'notes': notes,
+      'type': type.name,
     };
   }
 
@@ -86,6 +92,7 @@ class PackageItem {
       latitude: map['latitude'] as double?,
       longitude: map['longitude'] as double?,
       notes: map['notes'] as String? ?? '',
+      type: PackageType.values.byName(map['type'] as String? ?? 'delivery'),
     );
   }
 }

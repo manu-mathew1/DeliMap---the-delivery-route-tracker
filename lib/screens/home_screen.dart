@@ -634,12 +634,57 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                             ),
                             const SizedBox(width: 8),
+                            _buildStopTypeBadge(stop),
+                            const SizedBox(width: 8),
                             _buildStopStatusBadge(stop),
                           ],
                         ),
                       );
                     },
                   ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStopTypeBadge(DeliveryStop stop) {
+    final hasDelivery = stop.packages.any((p) => p.type == PackageType.delivery);
+    final hasPickup = stop.packages.any((p) => p.type == PackageType.pickup);
+
+    Color color;
+    String label;
+    IconData icon;
+
+    if (hasDelivery && hasPickup) {
+      color = const Color(0xFFFF9F0A); // Orange
+      label = 'MIXED';
+      icon = Icons.swap_horiz_rounded;
+    } else if (hasPickup) {
+      color = const Color(0xFFBF5AF2); // Purple
+      label = 'PICKUP';
+      icon = Icons.call_received_rounded;
+    } else {
+      color = const Color(0xFF0A84FF); // Blue
+      label = 'DELIVERY';
+      icon = Icons.local_shipping_rounded;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color, width: 0.5),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 10),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.bold),
           ),
         ],
       ),
@@ -809,6 +854,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                               overflow: TextOverflow.ellipsis,
                                             ),
                                           ),
+                                          _buildStopTypeBadge(stop),
+                                          const SizedBox(width: 8),
                                           if (stop.packages.length > 1) ...[
                                             Container(
                                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -888,6 +935,26 @@ class _HomeScreenState extends State<HomeScreen> {
                                                             : pkg.status == PackageStatus.failed
                                                                 ? const Color(0xFFFF453A)
                                                                 : const Color(0xFFF5A623),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  Container(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                                    decoration: BoxDecoration(
+                                                      color: pkg.type == PackageType.pickup
+                                                          ? const Color(0xFFBF5AF2).withOpacity(0.15)
+                                                          : const Color(0xFF0A84FF).withOpacity(0.15),
+                                                      borderRadius: BorderRadius.circular(3),
+                                                    ),
+                                                    child: Text(
+                                                      pkg.type.name.toUpperCase(),
+                                                      style: TextStyle(
+                                                        fontSize: 8,
+                                                        fontWeight: FontWeight.bold,
+                                                        color: pkg.type == PackageType.pickup
+                                                            ? const Color(0xFFBF5AF2)
+                                                            : const Color(0xFF0A84FF),
                                                       ),
                                                     ),
                                                   ),
@@ -1387,9 +1454,18 @@ class _HomeScreenState extends State<HomeScreen> {
                                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                     children: [
                                       Expanded(
-                                        child: Text(
-                                          stop.name,
-                                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 15),
+                                        child: Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                stop.name,
+                                                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 15),
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            _buildStopTypeBadge(stop),
+                                          ],
                                         ),
                                       ),
                                       Container(

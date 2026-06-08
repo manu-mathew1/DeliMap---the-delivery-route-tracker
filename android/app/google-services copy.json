@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "889058764875",
+    "project_id": "delimap-app-2026",
+    "storage_bucket": "delimap-app-2026.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:889058764875:android:784413148af1c077bc85ce",
+        "android_client_info": {
+          "package_name": "com.manumathew.delimap"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "889058764875-q4oiosmpvaes1u16c7sgj049f6tl0ohh.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.manumathew.delimap",
+            "certificate_hash": "b3b12eb99868798fabebc06fb18d38a80205ca4e"
+          }
+        },
+        {
+          "client_id": "889058764875-3e1241uk1q8bcvmj39qoa5sbod67cmr1.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCOWgT1wEy1CbsPb3XR3Gcbdlg-V8fyJak"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "889058764875-3e1241uk1q8bcvmj39qoa5sbod67cmr1.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

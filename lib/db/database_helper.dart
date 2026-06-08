@@ -24,7 +24,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -73,6 +73,7 @@ class DatabaseHelper {
         latitude REAL,
         longitude REAL,
         notes TEXT NOT NULL,
+        type TEXT DEFAULT 'delivery',
         FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
       )
     ''');
@@ -84,6 +85,13 @@ class DatabaseHelper {
         await db.execute('ALTER TABLE receivers ADD COLUMN last_updated INTEGER DEFAULT 0');
       } catch (e) {
         print('Database upgrade error: $e');
+      }
+    }
+    if (oldVersion < 3) {
+      try {
+        await db.execute("ALTER TABLE packages ADD COLUMN type TEXT DEFAULT 'delivery'");
+      } catch (e) {
+        print('Database upgrade v3 error: $e');
       }
     }
   }

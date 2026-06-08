@@ -219,128 +219,149 @@ class ImportService {
     );
   }
 
-  /// Opens file picker and returns a list of map records parsed from PDF, or null if cancelled.
+  /// Opens file picker and returns a list of map records parsed from one or more PDFs, or null if cancelled.
   static Future<List<Map<String, dynamic>>?> pickAndParsePDF() async {
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['pdf'],
+        allowMultiple: true,
       );
 
-      if (result == null || result.files.single.path == null) {
+      if (result == null || result.paths.isEmpty) {
         return null; // User cancelled
       }
 
-      final file = File(result.files.single.path!);
-      final List<int> bytes = await file.readAsBytes();
+      final List<Map<String, dynamic>> allParsedRecords = [];
 
-      // Load PDF using Syncfusion PDF library
-      final PdfDocument document = PdfDocument(inputBytes: bytes);
-      
-      // Extract text from all pages
-      final String fullText = PdfTextExtractor(document).extractText();
-      
-      // Dispose document to avoid leaks
-      document.dispose();
+      for (final filePath in result.paths) {
+        if (filePath == null) continue;
+        final file = File(filePath);
+        final List<int> bytes = await file.readAsBytes();
 
-      if (fullText.isEmpty) {
-        throw Exception("The selected PDF file contains no readable text.");
-      }
-
-      // Regex to find all Tracking IDs: 4 uppercase letters followed by 10 digits
-      final RegExp trackingRegExp = RegExp(r'[A-Z]{4}\d{10}');
-      final Iterable<RegExpMatch> matches = trackingRegExp.allMatches(fullText);
-
-      if (matches.isEmpty) {
-        throw Exception("No tracking IDs (e.g. FMPC1234567890) found in the PDF.");
-      }
-
-      final List<RegExpMatch> matchList = matches.toList();
-      final List<Map<String, dynamic>> records = [];
-
-      for (int i = 0; i < matchList.length; i++) {
-        final RegExpMatch currentMatch = matchList[i];
-        final String trackingId = currentMatch.group(0)!;
+        // Load PDF using Syncfusion PDF library
+        final PdfDocument document = PdfDocument(inputBytes: bytes);
         
-        final int startIdx = currentMatch.end;
-        final int endIdx = i + 1 < matchList.length ? matchList[i + 1].start : fullText.length;
+        // Extract text from all pages
+        final String fullText = PdfTextExtractor(document).extractText();
         
-        final String detailsText = fullText.substring(startIdx, endIdx).trim();
-        records.add({
-          'tracking_id': trackingId,
-          'details': detailsText,
-        });
-      }
+        // Dispose document to avoid leaks
+        document.dispose();
 
-      final List<Map<String, dynamic>> parsedRecords = [];
+        if (fullText.isEmpty) {
+          continue;
+        }
 
-      for (final r in records) {
-        final String trackingId = r['tracking_id'] as String;
-        final String rawDetails = r['details'] as String;
-        
-        // Clean up text spacing and replace newlines with spaces
-        final String cleanDetails = rawDetails.replaceAll(RegExp(r'\s+'), ' ');
+        // Determine if it is a pickupsheet by looking at the full text content
+        final bool isPickupSheet = fullText.toLowerCase().contains('pickupsheet') ||
+                                   fullText.toLowerCase().contains('pickup sheet') ||
+                                   fullText.toLowerCase().contains('view-pickupsheet');
 
-        // Date-time pattern: YYYY-MM-DD followed optionally by time, priority (P0-P4), amount, and address
-        final RegExp dtRegExp = RegExp(r'(\d{4}-\d{2}-\d{2}(?:\s?\d{2}:\d{2}:\d{2})?)\s*(P\d)\s*(\d+)\s*(.*)');
-        final RegExpMatch? dtMatch = dtRegExp.firstMatch(cleanDetails);
+        // Regex to find all Tracking IDs: 4 uppercase letters followed by 10 digits
+        final RegExp trackingRegExp = RegExp(r'[A-Z]{4}\d{10}');
+        final Iterable<RegExpMatch> matches = trackingRegExp.allMatches(fullText);
 
-        if (dtMatch != null) {
-          final String priority = dtMatch.group(2)!;
-          final String amountStr = dtMatch.group(3)!;
-          final String remainder = dtMatch.group(4)!;
+        if (matches.isEmpty) {
+          continue;
+        }
 
-          // Extract pincode (6-digit number starting with 6) and status
-          final RegExp pincodeRegExp = RegExp(r'(6\d{5})\s*(.*)');
-          final RegExpMatch? pincodeMatch = pincodeRegExp.firstMatch(remainder);
+        final List<RegExpMatch> matchList = matches.toList();
+        final List<Map<String, dynamic>> records = [];
 
-          String address = remainder;
-          String statusText = "";
-          String pincode = "";
+        for (int i = 0; i < matchList.length; i++) {
+          final RegExpMatch currentMatch = matchList[i];
+          final String trackingId = currentMatch.group(0)!;
+          
+          final int startIdx = currentMatch.end;
+          final int endIdx = i + 1 < matchList.length ? matchList[i + 1].start : fullText.length;
+          
+          final String detailsText = fullText.substring(startIdx, endIdx).trim();
+          records.add({
+            'tracking_id': trackingId,
+            'details': detailsText,
+          });
+        }
 
-          if (pincodeMatch != null) {
-            pincode = pincodeMatch.group(1)!;
-            statusText = pincodeMatch.group(2)!.trim();
-            address = remainder.substring(0, pincodeMatch.start).trim();
-          }
+        for (final r in records) {
+          final String trackingId = r['tracking_id'] as String;
+          final String rawDetails = r['details'] as String;
+          
+          // Clean up text spacing and replace newlines with spaces
+          final String cleanDetails = rawDetails.replaceAll(RegExp(r'\s+'), ' ');
 
-          // Clean up address
-          if (address.endsWith(',')) {
-            address = address.substring(0, address.length - 1).trim();
-          }
+          // Determine record type (delivery or pickup)
+          final bool isPickup = isPickupSheet || 
+                               cleanDetails.toLowerCase().contains('unpicked') || 
+                               cleanDetails.toLowerCase().contains('received') || 
+                               cleanDetails.toLowerCase().contains('pickup');
 
-          // Determine name: use first comma-separated segment, or first 2 words if no comma
-          String name = "";
-          if (address.contains(',')) {
-            name = address.split(',')[0].trim();
+          // Date-time pattern: YYYY-MM-DD followed optionally by time, priority (P0-P4), amount, and address
+          final RegExp dtRegExp = RegExp(r'(\d{4}-\d{2}-\d{2}(?:\s?\d{2}:\d{2}:\d{2})?)\s*(P\d)\s*(\d+)\s*(.*)');
+          final RegExpMatch? dtMatch = dtRegExp.firstMatch(cleanDetails);
+
+          if (dtMatch != null) {
+            final String priority = dtMatch.group(2)!;
+            final String amountStr = dtMatch.group(3)!;
+            final String remainder = dtMatch.group(4)!;
+
+            // Extract pincode (6-digit number starting with 6) and status
+            final RegExp pincodeRegExp = RegExp(r'(6\d{5})\s*(.*)');
+            final RegExpMatch? pincodeMatch = pincodeRegExp.firstMatch(remainder);
+
+            String address = remainder;
+            String statusText = "";
+            String pincode = "";
+
+            if (pincodeMatch != null) {
+              pincode = pincodeMatch.group(1)!;
+              statusText = pincodeMatch.group(2)!.trim();
+              address = remainder.substring(0, pincodeMatch.start).trim();
+            }
+
+            // Clean up address
+            if (address.endsWith(',')) {
+              address = address.substring(0, address.length - 1).trim();
+            }
+
+            // Determine name: use first comma-separated segment, or first 2 words if no comma
+            String name = "";
+            if (address.contains(',')) {
+              name = address.split(',')[0].trim();
+            } else {
+              final List<String> words = address.split(' ');
+              name = words.length >= 2 ? "${words[0]} ${words[1]}" : address;
+            }
+
+            // Limit status code to raw text
+            if (statusText.length > 50) {
+              statusText = statusText.substring(0, 50).trim();
+            }
+
+            allParsedRecords.add({
+              'id': trackingId,
+              'name': name,
+              'addressText': '$address ${pincode.isNotEmpty ? pincode : ""}'.trim(),
+              'notes': 'Priority: $priority | COD Amount: $amountStr${statusText.isNotEmpty ? ' | Status: $statusText' : ''}',
+              'type': isPickup ? 'pickup' : 'delivery',
+            });
           } else {
-            final List<String> words = address.split(' ');
-            name = words.length >= 2 ? "${words[0]} ${words[1]}" : address;
+            // Fallback parsing if structure differs
+            allParsedRecords.add({
+              'id': trackingId,
+              'name': 'Customer $trackingId',
+              'addressText': cleanDetails.length > 100 ? cleanDetails.substring(0, 100) : cleanDetails,
+              'notes': 'Unparsed data: $cleanDetails',
+              'type': isPickup ? 'pickup' : 'delivery',
+            });
           }
-
-          // Limit status code to raw text
-          if (statusText.length > 50) {
-            statusText = statusText.substring(0, 50).trim();
-          }
-
-          parsedRecords.add({
-            'id': trackingId,
-            'name': name,
-            'addressText': '$address ${pincode.isNotEmpty ? pincode : ""}'.trim(),
-            'notes': 'Priority: $priority | COD Amount: $amountStr${statusText.isNotEmpty ? ' | Status: $statusText' : ''}',
-          });
-        } else {
-          // Fallback parsing if structure differs
-          parsedRecords.add({
-            'id': trackingId,
-            'name': 'Customer $trackingId',
-            'addressText': cleanDetails.length > 100 ? cleanDetails.substring(0, 100) : cleanDetails,
-            'notes': 'Unparsed data: $cleanDetails',
-          });
         }
       }
 
-      return parsedRecords;
+      if (allParsedRecords.isEmpty) {
+        throw Exception("No valid tracking IDs found in any of the selected PDF files.");
+      }
+
+      return allParsedRecords;
     } catch (e) {
       print("PDF Parser Error: $e");
       rethrow;
@@ -370,6 +391,8 @@ class ImportService {
       final String parsedName = r['name'] as String;
       final String address = r['addressText'] as String;
       final String notes = r['notes'] as String;
+      final String typeStr = r['type'] as String? ?? 'delivery';
+      final PackageType type = PackageType.values.byName(typeStr);
 
       final currentProgress = (i + 1) / totalRecords;
       onProgress("Checking duplicate: $trackingId", currentProgress);
@@ -425,6 +448,7 @@ class ImportService {
         latitude: lat,
         longitude: lng,
         notes: notes,
+        type: type,
       );
 
       try {
