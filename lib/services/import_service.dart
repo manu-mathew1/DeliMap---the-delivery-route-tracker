@@ -422,19 +422,38 @@ class ImportService {
         resolvedReceiverId = existingReceiver.id;
         print("Runsheet PDF: Resolved $trackingId from master directory: $finalName ($lat, $lng)");
       } else {
-        // Not in master directory. Geocode the address
-        onProgress("Geocoding location: $parsedName", currentProgress);
-        final geocodeResult = await GeocodingService.geocodeAddress(address);
-        if (geocodeResult != null) {
-          lat = geocodeResult.latitude;
-          lng = geocodeResult.longitude;
-        } else {
-          lat = 0.0;
-          lng = 0.0;
+        // Not in master directory. Check if we have already parsed a package for this customer in the current run
+        PackageItem? matchingPkg;
+        for (final p in activePackages) {
+          if (p.name.trim().toLowerCase() == parsedName.trim().toLowerCase() && 
+              p.addressText.trim().toLowerCase() == address.trim().toLowerCase()) {
+            matchingPkg = p;
+            break;
+          }
         }
-        resolvedReceiverId = trackingId; // Default to tracking ID if new
-        // Small delay to respect Google Geocoding API limits
-        await Future.delayed(const Duration(milliseconds: 150));
+
+        if (matchingPkg != null) {
+          // Match found in current session! Reuse its details and resolved receiver ID
+          finalName = matchingPkg.name;
+          lat = matchingPkg.latitude;
+          lng = matchingPkg.longitude;
+          resolvedReceiverId = matchingPkg.receiverId;
+          print("Runsheet PDF: Grouping $trackingId with existing session package for $finalName");
+        } else {
+          // Truly new customer. Geocode the address
+          onProgress("Geocoding location: $parsedName", currentProgress);
+          final geocodeResult = await GeocodingService.geocodeAddress(address);
+          if (geocodeResult != null) {
+            lat = geocodeResult.latitude;
+            lng = geocodeResult.longitude;
+          } else {
+            lat = 0.0;
+            lng = 0.0;
+          }
+          resolvedReceiverId = trackingId; // Default to tracking ID if new
+          // Small delay to respect Google Geocoding API limits
+          await Future.delayed(const Duration(milliseconds: 150));
+        }
       }
 
       final newPackage = PackageItem(
@@ -455,6 +474,7 @@ class ImportService {
         await DatabaseHelper.instance.insertPackage(newPackage);
         imported++;
         existingPackageIds.add(trackingId); // Add to local set to prevent duplicates in same run
+        activePackages.add(newPackage); // Add to active list for grouping detection in same loop
       } catch (e) {
         print("Error inserting package $trackingId: $e");
         errors++;
