@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import '../db/database_helper.dart';
 import '../models/receiver_record.dart';
 import '../services/import_service.dart';
@@ -201,145 +203,81 @@ class _ReceiversBookScreenState extends State<ReceiversBookScreen> {
     }
   }
 
-  Future<void> _importPDF() async {
+  Future<void> _exportCSV() async {
     try {
-      final records = await ImportService.pickAndParsePDF();
-      if (records == null) return; // Cancelled
-
-      // Check how many records actually need geocoding (are not duplicates)
-      int newCount = 0;
-      for (final r in records) {
-        final existing = await DatabaseHelper.instance.getReceiver(r['id'] as String);
-        if (existing == null) {
-          newCount++;
+      final receivers = await DatabaseHelper.instance.getAllReceivers();
+      if (receivers.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No receivers found to export.')),
+          );
         }
-      }
-
-      if (newCount == 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('All entries in this PDF runsheet are already in the directory.'),
-            backgroundColor: Color(0xFF30D158),
-          ),
-        );
         return;
       }
 
-      if (newCount > 10) {
-        final confirm = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            backgroundColor: const Color(0xFF1C1C1E),
-            title: const Text('Confirm Geocoding', style: TextStyle(color: Colors.white)),
-            content: Text(
-              'There are $newCount new entries in this runsheet that will be geocoded using the Google Geocoding API. '
-              'This may take some time and consume API quota. Proceed?',
-              style: const TextStyle(color: Color(0xFF8E8E93)),
-            ),
-            actions: [
-              TextButton(
-                child: const Text('Cancel', style: TextStyle(color: Color(0xFF8E8E93))),
-                onPressed: () => Navigator.pop(context, false),
-              ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFF5A623)),
-                child: const Text('Proceed', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-                onPressed: () => Navigator.pop(context, true),
-              ),
-            ],
-          ),
+      final csvBuffer = StringBuffer();
+      csvBuffer.writeln('ID,Name,Address,Latitude,Longitude,Notes,DeliveryCount,LastDelivered,IsVerified,LastUpdated');
+
+      for (final r in receivers) {
+        csvBuffer.writeln(
+          '"${r.id}",'
+          '"${r.name.replaceAll('"', '""')}",'
+          '"${r.addressText.replaceAll('"', '""')}",'
+          '${r.latitude},'
+          '${r.longitude},'
+          '"${r.notes.replaceAll('"', '""')}",'
+          '${r.deliveryCount},'
+          '"${r.lastDelivered?.toIso8601String() ?? ''}",'
+          '${r.isVerified ? 1 : 0},'
+          '${r.lastUpdated}'
         );
-        if (confirm != true) return;
       }
 
-      // Show progress overlay
-      double progress = 0.0;
-      String status = "Initializing import...";
-      StateSetter? dialogSetState;
+      String filePath = '';
+      if (Platform.isAndroid) {
+        final downloadDir = Directory('/storage/emulated/0/Download');
+        if (await downloadDir.exists()) {
+          filePath = '${downloadDir.path}/delimap_receivers.csv';
+          final file = File(filePath);
+          await file.writeAsString(csvBuffer.toString());
+        } else {
+          final externalDir = await getExternalStorageDirectory();
+          if (externalDir != null) {
+            filePath = '${externalDir.path}/delimap_receivers.csv';
+            final file = File(filePath);
+            await file.writeAsString(csvBuffer.toString());
+          }
+        }
+      } else {
+        final appDocDir = await getApplicationDocumentsDirectory();
+        filePath = '${appDocDir.path}/delimap_receivers.csv';
+        final file = File(filePath);
+        await file.writeAsString(csvBuffer.toString());
+      }
 
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) {
-          return AlertDialog(
-            backgroundColor: const Color(0xFF1C1C1E),
-            content: StatefulBuilder(
-              builder: (context, setDialogState) {
-                dialogSetState = setDialogState;
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Importing PDF Runsheet',
-                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                    ),
-                    const SizedBox(height: 20),
-                    LinearProgressIndicator(
-                      value: progress,
-                      color: const Color(0xFFF5A623),
-                      backgroundColor: const Color(0xFF2C2C2E),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      '${(progress * 100).toStringAsFixed(0)}%',
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      status,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 12),
-                    ),
-                  ],
-                );
-              },
-            ),
-          );
-        },
-      );
-
-      try {
-        final result = await ImportService.processPDFImport(
-          records: records,
-          onProgress: (newStatus, newProgress) {
-            if (dialogSetState != null) {
-              dialogSetState!(() {
-                status = newStatus;
-                progress = newProgress;
-              });
-            }
-          },
-        );
-
-        Navigator.pop(context); // Dismiss progress dialog
-        _loadReceivers();
-
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              'Import complete! Imported ${result.importedCount} new, '
-              'skipped ${result.duplicateCount} duplicates, '
-              'errors: ${result.errorCount}.',
-            ),
+            content: Text('CSV exported to: $filePath'),
             backgroundColor: const Color(0xFF30D158),
-          ),
-        );
-      } catch (e) {
-        Navigator.pop(context); // Dismiss progress dialog
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Import failed: $e'),
-            backgroundColor: const Color(0xFFFF453A),
+            duration: const Duration(seconds: 6),
+            action: SnackBarAction(
+              label: 'Dismiss',
+              textColor: Colors.white,
+              onPressed: () {},
+            ),
           ),
         );
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to parse PDF: $e'),
-          backgroundColor: const Color(0xFFFF453A),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('CSV export failed: $e'),
+            backgroundColor: const Color(0xFFFF453A),
+          ),
+        );
+      }
     }
   }
 
@@ -577,14 +515,14 @@ class _ReceiversBookScreenState extends State<ReceiversBookScreen> {
                 Row(
                   children: [
                     IconButton(
-                      icon: const Icon(Icons.picture_as_pdf, color: Color(0xFFF5A623), size: 26),
-                      tooltip: 'Import PDF Runsheet',
-                      onPressed: _importPDF,
-                    ),
-                    IconButton(
                       icon: const Icon(Icons.upload_file, color: Color(0xFFF5A623), size: 26),
                       tooltip: 'Import CSV',
                       onPressed: _importCSV,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.download, color: Color(0xFFF5A623), size: 26),
+                      tooltip: 'Export CSV',
+                      onPressed: _exportCSV,
                     ),
                     IconButton(
                       icon: const Icon(Icons.add_circle_outline, color: Color(0xFFF5A623), size: 28),

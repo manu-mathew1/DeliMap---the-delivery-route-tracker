@@ -6,6 +6,7 @@ import '../models/receiver_record.dart';
 import '../models/delivery_stop.dart';
 import 'ocr_scan_screen.dart';
 import 'barcode_scan_screen.dart';
+import '../services/import_service.dart';
 import 'route_map_screen.dart';
 import 'packing_order_screen.dart';
 import 'receivers_book_screen.dart';
@@ -68,6 +69,152 @@ class _HomeScreenState extends State<HomeScreen> {
       _pastSessions = past.where((s) => s.status == SessionStatus.completed).toList();
       _isLoading = false;
     });
+  }
+
+  Future<void> _importRunsheetPDF() async {
+    if (_activeSession == null) return;
+    try {
+      final records = await ImportService.pickAndParsePDF();
+      if (records == null) return; // Cancelled
+
+      // Check how many records actually need geocoding (are not duplicates in session and not in master directory)
+      int newCount = 0;
+      final Set<String> existingPackageIds = _packages.map((p) => p.id).toSet();
+
+      for (final r in records) {
+        final String trackingId = r['id'] as String;
+        final String name = r['name'] as String;
+        final String address = r['addressText'] as String;
+
+        if (!existingPackageIds.contains(trackingId)) {
+          // Check if it exists in the master directory
+          var existingReceiver = await DatabaseHelper.instance.getReceiverByNameAndAddress(name, address);
+          if (existingReceiver == null) {
+            existingReceiver = await DatabaseHelper.instance.getReceiver(trackingId);
+          }
+          if (existingReceiver == null) {
+            newCount++;
+          }
+        }
+      }
+
+      if (newCount > 10) {
+        final confirm = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFF1C1C1E),
+            title: const Text('Confirm Geocoding', style: TextStyle(color: Colors.white)),
+            content: Text(
+              'There are $newCount new stops in this runsheet that will be geocoded using the Google Geocoding API. '
+              'This may take some time and consume API quota. Proceed?',
+              style: const TextStyle(color: Color(0xFF8E8E93)),
+            ),
+            actions: [
+              TextButton(
+                child: const Text('Cancel', style: TextStyle(color: Color(0xFF8E8E93))),
+                onPressed: () => Navigator.pop(context, false),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFF5A623)),
+                child: const Text('Proceed', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                onPressed: () => Navigator.pop(context, true),
+              ),
+            ],
+          ),
+        );
+        if (confirm != true) return;
+      }
+
+      // Show progress overlay
+      double progress = 0.0;
+      String status = "Initializing import...";
+      StateSetter? dialogSetState;
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1C1C1E),
+            content: StatefulBuilder(
+              builder: (context, setDialogState) {
+                dialogSetState = setDialogState;
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Importing Daily Runsheet',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
+                    const SizedBox(height: 20),
+                    LinearProgressIndicator(
+                      value: progress,
+                      color: const Color(0xFFF5A623),
+                      backgroundColor: const Color(0xFF2C2C2E),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '${(progress * 100).toStringAsFixed(0)}%',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      status,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 12),
+                    ),
+                  ],
+                );
+              },
+            ),
+          );
+        },
+      );
+
+      try {
+        final result = await ImportService.processPDFRunsheetImport(
+          sessionId: _activeSession!.id,
+          records: records,
+          onProgress: (newStatus, newProgress) {
+            if (dialogSetState != null) {
+              dialogSetState!(() {
+                status = newStatus;
+                progress = newProgress;
+              });
+            }
+          },
+        );
+
+        Navigator.pop(context); // Dismiss progress dialog
+        _loadSessionData();
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Runsheet loaded! Added ${result.importedCount} packages, '
+              'skipped ${result.duplicateCount} duplicates, '
+              'errors: ${result.errorCount}.',
+            ),
+            backgroundColor: const Color(0xFF30D158),
+          ),
+        );
+      } catch (e) {
+        Navigator.pop(context); // Dismiss progress dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Import failed: $e'),
+            backgroundColor: const Color(0xFFFF453A),
+          ),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to parse PDF: $e'),
+          backgroundColor: const Color(0xFFFF453A),
+        ),
+      );
+    }
   }
 
   Future<void> _startNewDay() async {
@@ -331,6 +478,20 @@ class _HomeScreenState extends State<HomeScreen> {
             width: double.infinity,
             height: 56,
             child: ElevatedButton.icon(
+              icon: const Icon(Icons.picture_as_pdf, color: Colors.black),
+              label: const Text('📋 IMPORT DAILY RUNSHEET PDF', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFF5A623),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+              ),
+              onPressed: _importRunsheetPDF,
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            height: 56,
+            child: ElevatedButton.icon(
               icon: const Icon(Icons.qr_code_scanner, color: Colors.black),
               label: const Text('📷 SCAN AWB BARCODES', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
               style: ElevatedButton.styleFrom(
@@ -517,44 +678,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildStatusBadge(PackageItem pkg) {
-    Color color = const Color(0xFF8E8E93);
-    String label = 'Processing';
-
-    if (pkg.status == PackageStatus.delivered) {
-      color = const Color(0xFF30D158);
-      label = 'Delivered';
-    } else if (pkg.status == PackageStatus.failed) {
-      color = const Color(0xFFFF453A);
-      label = 'Failed';
-    } else {
-      // Pending statuses based on geocoding
-      if (pkg.latitude == null) {
-        color = const Color(0xFF8E8E93);
-        label = '⏳ Geocoding';
-      } else if (pkg.receiverId != null) {
-        color = const Color(0xFF30D158);
-        label = '✅ Known';
-      } else {
-        color = const Color(0xFFFF9F0A);
-        label = '🆕 New';
-      }
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.15),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: color, width: 1),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold),
-      ),
-    );
-  }
-
   Widget _buildQueueTab() {
     if (_activeSession == null) {
       return const Center(
@@ -625,8 +748,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       final isDelivered = stop.isDelivered;
                       
                       final pendingIndex = sortedPendingStops.indexOf(stop);
-
-                      final pkgCountText = stop.packages.length > 1 ? ' (${stop.packages.length} packages)' : '';
 
                       return Container(
                         margin: const EdgeInsets.only(bottom: 12),
@@ -944,14 +1065,25 @@ class _HomeScreenState extends State<HomeScreen> {
                       .firstWhere((p) => p.receiverId != null, orElse: () => stop.packages.first)
                       .receiverId;
 
+                  ReceiverRecord? existingReceiver;
+                  if (firstReceiverId != null) {
+                    existingReceiver = await DatabaseHelper.instance.getReceiver(firstReceiverId);
+                  }
+                  if (existingReceiver == null) {
+                    existingReceiver = await DatabaseHelper.instance.getReceiverByNameAndAddress(stop.name, stop.addressText);
+                  }
+
+                  final int existingCount = existingReceiver?.deliveryCount ?? 0;
+                  final String resolvedId = existingReceiver?.id ?? firstReceiverId ?? const Uuid().v4();
+
                   final receiverRecord = ReceiverRecord(
-                    id: firstReceiverId ?? const Uuid().v4(),
+                    id: resolvedId,
                     name: stop.name,
                     addressText: stop.addressText,
                     latitude: lat,
                     longitude: lng,
                     notes: notesController.text,
-                    deliveryCount: stop.packages.length,
+                    deliveryCount: existingCount + stop.packages.length,
                     lastDelivered: DateTime.now(),
                     isVerified: true,
                   );

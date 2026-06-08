@@ -31,7 +31,6 @@ class _RouteMapScreenState extends State<RouteMapScreen> {
   Position? _currentPosition;
   List<DeliveryStop> _orderedStops = [];
   bool _isLoading = true;
-  bool _isNavigatingLive = false;
   StreamSubscription<Position>? _positionStreamSubscription;
 
   // Map markers & polylines
@@ -340,15 +339,26 @@ class _RouteMapScreenState extends State<RouteMapScreen> {
                     .firstWhere((p) => p.receiverId != null, orElse: () => stop.packages.first)
                     .receiverId;
 
+                ReceiverRecord? existingReceiver;
+                if (firstReceiverId != null) {
+                  existingReceiver = await DatabaseHelper.instance.getReceiver(firstReceiverId);
+                }
+                if (existingReceiver == null) {
+                  existingReceiver = await DatabaseHelper.instance.getReceiverByNameAndAddress(stop.name, stop.addressText);
+                }
+
+                final int existingCount = existingReceiver?.deliveryCount ?? 0;
+                final String resolvedId = existingReceiver?.id ?? firstReceiverId ?? const Uuid().v4();
+
                 // Create or update receiver record in database
                 final receiverRecord = ReceiverRecord(
-                  id: firstReceiverId ?? const Uuid().v4(),
+                  id: resolvedId,
                   name: stop.name,
                   addressText: stop.addressText,
                   latitude: lat,
                   longitude: lng,
                   notes: notesController.text,
-                  deliveryCount: stop.packages.length,
+                  deliveryCount: existingCount + stop.packages.length,
                   lastDelivered: DateTime.now(),
                   isVerified: true,
                 );

@@ -139,7 +139,31 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
   }
 
   Future<void> _handleScannedBarcode(String barcodeValue) async {
-    // 1. Query receivers table in local SQLite
+    // 1. Check if this package is already in today's active session
+    final List<PackageItem> activePackages = await DatabaseHelper.instance.getPackagesInSession(widget.sessionId);
+    final PackageItem? existingPkg = activePackages.firstWhere(
+      (p) => p.id == barcodeValue,
+      orElse: () => null as dynamic,
+    );
+
+    if (existingPkg != null) {
+      _playFeedback(ScanFeedbackType.success);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ Scanned: ${existingPkg.name} (Stop already in runsheet)'),
+            backgroundColor: const Color(0xFF30D158),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+      setState(() {
+        _isProcessing = false;
+      });
+      return;
+    }
+
+    // 2. Query receivers table in local SQLite (by barcode/AWB just in case)
     final ReceiverRecord? receiver = await DatabaseHelper.instance.getReceiver(barcodeValue);
 
     if (receiver == null) {
@@ -153,9 +177,8 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
       return;
     }
 
-    // 2. Check if this package is already added in today's active session
-    final List<PackageItem> activePackages = await DatabaseHelper.instance.getPackagesInSession(widget.sessionId);
-    final isDuplicate = activePackages.any((p) => p.id == barcodeValue || p.receiverId == receiver.id);
+    // 3. Check if duplicate by receiver ID to avoid double-adding the same customer
+    final isDuplicate = activePackages.any((p) => p.receiverId == receiver.id);
 
     if (isDuplicate) {
       _playFeedback(ScanFeedbackType.duplicate);
@@ -173,7 +196,7 @@ class _BarcodeScanScreenState extends State<BarcodeScanScreen> {
       return;
     }
 
-    // 3. Add package to local SQLite runsheet
+    // 4. Add package to local SQLite runsheet
     final newPkg = PackageItem(
       id: barcodeValue, // Use tracking ID as the package primary key
       sessionId: widget.sessionId,

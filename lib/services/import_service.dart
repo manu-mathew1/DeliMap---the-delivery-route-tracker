@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:uuid/uuid.dart';
 import '../db/database_helper.dart';
 import '../models/receiver_record.dart';
+import '../models/package_item.dart';
 import 'geocoding_service.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 
@@ -60,18 +61,28 @@ class ImportService {
   static Map<String, int> mapHeaders(List<dynamic> headerRow) {
     final headers = headerRow.map((e) => e.toString().toLowerCase().trim()).toList();
 
+    int idIdx = headers.indexWhere((h) => h == 'id' || h == 'uuid' || h == 'receiver_id');
     int nameIdx = headers.indexWhere((h) => h.contains('name') || h == 'receiver' || h == 'buyer' || h == 'customer');
     int addressIdx = headers.indexWhere((h) => h.contains('address') || h == 'location' || h == 'street' || h == 'place');
     int latIdx = headers.indexWhere((h) => h == 'latitude' || h == 'lat');
     int lngIdx = headers.indexWhere((h) => h == 'longitude' || h == 'lng' || h == 'lon');
     int notesIdx = headers.indexWhere((h) => h.contains('note') || h == 'comment' || h == 'info');
+    int deliveryCountIdx = headers.indexWhere((h) => h.contains('deliverycount') || h.contains('delivery_count'));
+    int lastDeliveredIdx = headers.indexWhere((h) => h.contains('lastdelivered') || h.contains('last_delivered'));
+    int isVerifiedIdx = headers.indexWhere((h) => h.contains('isverified') || h.contains('is_verified'));
+    int lastUpdatedIdx = headers.indexWhere((h) => h.contains('lastupdated') || h.contains('last_updated'));
 
     return {
+      'id': idIdx,
       'name': nameIdx,
       'address': addressIdx,
       'latitude': latIdx,
       'longitude': lngIdx,
       'notes': notesIdx,
+      'deliveryCount': deliveryCountIdx,
+      'lastDelivered': lastDeliveredIdx,
+      'isVerified': isVerifiedIdx,
+      'lastUpdated': lastUpdatedIdx,
     };
   }
 
@@ -81,11 +92,16 @@ class ImportService {
     required Map<String, int> columnMapping,
     required Function(String status, double progress) onProgress,
   }) async {
+    final idIdx = columnMapping['id'] ?? -1;
     final nameIdx = columnMapping['name']!;
     final addressIdx = columnMapping['address']!;
     final latIdx = columnMapping['latitude']!;
     final lngIdx = columnMapping['longitude']!;
     final notesIdx = columnMapping['notes']!;
+    final deliveryCountIdx = columnMapping['deliveryCount'] ?? -1;
+    final lastDeliveredIdx = columnMapping['lastDelivered'] ?? -1;
+    final isVerifiedIdx = columnMapping['isVerified'] ?? -1;
+    final lastUpdatedIdx = columnMapping['lastUpdated'] ?? -1;
 
     int imported = 0;
     int duplicates = 0;
@@ -150,14 +166,45 @@ class ImportService {
 
       final notes = notesIdx != -1 && notesIdx < row.length ? row[notesIdx]?.toString().trim() ?? '' : '';
 
+      String recordId = (idIdx != -1 && idIdx < row.length && row[idIdx]?.toString().isNotEmpty == true)
+          ? row[idIdx].toString().trim().replaceAll('"', '')
+          : const Uuid().v4();
+
+      int deliveryCount = 0;
+      if (deliveryCountIdx != -1 && deliveryCountIdx < row.length) {
+        deliveryCount = int.tryParse(row[deliveryCountIdx]?.toString() ?? '') ?? 0;
+      }
+
+      DateTime? lastDelivered;
+      if (lastDeliveredIdx != -1 && lastDeliveredIdx < row.length && row[lastDeliveredIdx]?.toString().isNotEmpty == true) {
+        final dateStr = row[lastDeliveredIdx].toString().trim().replaceAll('"', '');
+        if (dateStr.isNotEmpty) {
+          lastDelivered = DateTime.tryParse(dateStr);
+        }
+      }
+
+      bool isVerifiedVal = isVerified;
+      if (isVerifiedIdx != -1 && isVerifiedIdx < row.length && row[isVerifiedIdx]?.toString().isNotEmpty == true) {
+        final val = row[isVerifiedIdx].toString().trim().toLowerCase();
+        isVerifiedVal = (val == '1' || val == 'true');
+      }
+
+      int? lastUpdated;
+      if (lastUpdatedIdx != -1 && lastUpdatedIdx < row.length) {
+        lastUpdated = int.tryParse(row[lastUpdatedIdx]?.toString() ?? '');
+      }
+
       final newReceiver = ReceiverRecord(
-        id: const Uuid().v4(),
+        id: recordId,
         name: name,
         addressText: address,
         latitude: lat,
         longitude: lng,
         notes: notes,
-        isVerified: isVerified,
+        deliveryCount: deliveryCount,
+        lastDelivered: lastDelivered,
+        isVerified: isVerifiedVal,
+        lastUpdated: lastUpdated,
       );
 
       // Save to local SQLite and sync with Cloud Firestore
@@ -300,8 +347,10 @@ class ImportService {
     }
   }
 
-  /// Process the parsed PDF records, geocode if needed, and save to database.
-  static Future<ImportResult> processPDFImport({
+
+  /// Process the parsed PDF records, resolve coordinates (using master database or geocoding), and save as packages in active session.
+  static Future<ImportResult> processPDFRunsheetImport({
+    required String sessionId,
     required List<Map<String, dynamic>> records,
     required Function(String status, double progress) onProgress,
   }) async {
@@ -311,59 +360,79 @@ class ImportService {
 
     final totalRecords = records.length;
 
+    // Fetch existing packages in session to avoid duplicate stops
+    final List<PackageItem> activePackages = await DatabaseHelper.instance.getPackagesInSession(sessionId);
+    final Set<String> existingPackageIds = activePackages.map((p) => p.id).toSet();
+
     for (int i = 0; i < records.length; i++) {
       final r = records[i];
       final String trackingId = r['id'] as String;
-      final String name = r['name'] as String;
+      final String parsedName = r['name'] as String;
       final String address = r['addressText'] as String;
       final String notes = r['notes'] as String;
 
       final currentProgress = (i + 1) / totalRecords;
       onProgress("Checking duplicate: $trackingId", currentProgress);
 
-      // Check for exact duplicate in DB (by AWB / tracking ID primary key)
-      final existing = await DatabaseHelper.instance.getReceiver(trackingId);
-      if (existing != null) {
+      // 1. Check if package is already in this session
+      if (existingPackageIds.contains(trackingId)) {
         duplicates++;
         continue;
       }
 
-      onProgress("Geocoding location: $name", currentProgress);
-      
-      double? lat;
-      double? lng;
-      bool isVerified = true;
-
-      // Geocode the address text
-      final geocodeResult = await GeocodingService.geocodeAddress(address);
-      if (geocodeResult != null) {
-        lat = geocodeResult.latitude;
-        lng = geocodeResult.longitude;
-      } else {
-        // Fallback to 0.0, 0.0 and mark as unverified
-        lat = 0.0;
-        lng = 0.0;
-        isVerified = false;
+      // 2. Check if we already have this receiver in the master directory
+      ReceiverRecord? existingReceiver = await DatabaseHelper.instance.getReceiverByNameAndAddress(parsedName, address);
+      if (existingReceiver == null) {
+        existingReceiver = await DatabaseHelper.instance.getReceiver(trackingId);
       }
 
-      // Small delay to respect Google Geocoding API limits
-      await Future.delayed(const Duration(milliseconds: 150));
+      String finalName = parsedName;
+      double? lat;
+      double? lng;
+      String? resolvedReceiverId;
 
-      final newReceiver = ReceiverRecord(
-        id: trackingId, // Use Tracking ID as primary key
-        name: name,
+      if (existingReceiver != null) {
+        // Match found! Use existing coordinates and name from master directory
+        finalName = existingReceiver.name;
+        lat = existingReceiver.latitude;
+        lng = existingReceiver.longitude;
+        resolvedReceiverId = existingReceiver.id;
+        print("Runsheet PDF: Resolved $trackingId from master directory: $finalName ($lat, $lng)");
+      } else {
+        // Not in master directory. Geocode the address
+        onProgress("Geocoding location: $parsedName", currentProgress);
+        final geocodeResult = await GeocodingService.geocodeAddress(address);
+        if (geocodeResult != null) {
+          lat = geocodeResult.latitude;
+          lng = geocodeResult.longitude;
+        } else {
+          lat = 0.0;
+          lng = 0.0;
+        }
+        resolvedReceiverId = trackingId; // Default to tracking ID if new
+        // Small delay to respect Google Geocoding API limits
+        await Future.delayed(const Duration(milliseconds: 150));
+      }
+
+      final newPackage = PackageItem(
+        id: trackingId, // Tracking ID as package ID
+        sessionId: sessionId,
+        name: finalName,
         addressText: address,
+        status: PackageStatus.pending,
+        scannedAt: DateTime.now(),
+        receiverId: resolvedReceiverId, // Link resolved receiver ID
         latitude: lat,
         longitude: lng,
         notes: notes,
-        isVerified: isVerified,
       );
 
       try {
-        await DatabaseHelper.instance.insertReceiver(newReceiver);
+        await DatabaseHelper.instance.insertPackage(newPackage);
         imported++;
+        existingPackageIds.add(trackingId); // Add to local set to prevent duplicates in same run
       } catch (e) {
-        print("Error inserting receiver $trackingId: $e");
+        print("Error inserting package $trackingId: $e");
         errors++;
       }
     }
