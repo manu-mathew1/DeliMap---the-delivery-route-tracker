@@ -267,6 +267,35 @@ class DatabaseHelper {
     return result.map((json) => DeliverySession.fromMap(json)).toList();
   }
 
+  Future<void> prunePastSessions(int keepCount) async {
+    final db = await instance.database;
+    final completedSessions = await db.query(
+      'sessions',
+      where: 'status = ?',
+      whereArgs: [SessionStatus.completed.name],
+      orderBy: 'date DESC',
+    );
+
+    if (completedSessions.length > keepCount) {
+      final sessionsToDelete = completedSessions.sublist(keepCount);
+      for (final session in sessionsToDelete) {
+        final id = session['id'] as String;
+        // Delete packages belonging to this session
+        await db.delete(
+          'packages',
+          where: 'session_id = ?',
+          whereArgs: [id],
+        );
+        // Delete session itself
+        await db.delete(
+          'sessions',
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+      }
+    }
+  }
+
   // ==========================================
   // PACKAGES CRUD
   // ==========================================

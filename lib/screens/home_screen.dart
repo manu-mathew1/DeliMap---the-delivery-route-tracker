@@ -257,6 +257,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (confirm == true) {
       final updated = _activeSession!.copyWith(status: SessionStatus.completed);
       await DatabaseHelper.instance.updateSession(updated);
+      await DatabaseHelper.instance.prunePastSessions(15);
       await _loadSessionData();
     }
   }
@@ -396,27 +397,41 @@ class _HomeScreenState extends State<HomeScreen> {
                       final session = _pastSessions[index];
                       return Container(
                         margin: const EdgeInsets.only(bottom: 12),
-                        padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
                           color: const Color(0xFF1C1C1E),
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _formatDate(session.date),
-                                  style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
-                                ),
-                                const SizedBox(height: 4),
-                                const Text('Status: Completed', style: TextStyle(color: Color(0xFF30D158), fontSize: 12)),
-                              ],
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: () async {
+                              final pkgs = await DatabaseHelper.instance.getPackagesInSession(session.id);
+                              if (mounted) {
+                                _showSessionSummaryBottomSheet(session, pkgs);
+                              }
+                            },
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        _formatDate(session.date),
+                                        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      const Text('Status: Completed', style: TextStyle(color: Color(0xFF30D158), fontSize: 12)),
+                                    ],
+                                  ),
+                                  const Icon(Icons.arrow_forward_ios, size: 16, color: Color(0xFF8E8E93)),
+                                ],
+                              ),
                             ),
-                            const Icon(Icons.arrow_forward_ios, size: 16, color: Color(0xFF8E8E93)),
-                          ],
+                          ),
                         ),
                       );
                     },
@@ -1173,6 +1188,285 @@ class _HomeScreenState extends State<HomeScreen> {
         const SnackBar(content: Text('Could not launch navigation application.')),
       );
     }
+  }
+
+  void _showSessionSummaryBottomSheet(DeliverySession session, List<PackageItem> packages) {
+    final stops = RouteService.groupPackagesIntoStops(packages);
+    
+    final totalPackages = packages.length;
+    final deliveredPackages = packages.where((p) => p.status == PackageStatus.delivered).length;
+    final failedPackages = packages.where((p) => p.status == PackageStatus.failed).length;
+    final pendingPackages = packages.where((p) => p.status == PackageStatus.pending).length;
+
+    final totalStops = stops.length;
+    final deliveredStops = stops.where((s) => s.isDelivered).length;
+
+    double completionRate = totalPackages > 0 ? (deliveredPackages / totalPackages) * 100 : 0.0;
+
+    // Calculate total COD Amount
+    double totalCodAmount = 0.0;
+    for (final pkg in packages) {
+      if (pkg.status == PackageStatus.delivered) {
+        final match = RegExp(r'COD Amount:\s*(\d+)').firstMatch(pkg.notes);
+        if (match != null) {
+          totalCodAmount += double.tryParse(match.group(1) ?? '') ?? 0.0;
+        }
+      }
+    }
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1C1C1E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(20),
+          topRight: Radius.circular(20),
+        ),
+      ),
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.85,
+          minChildSize: 0.5,
+          maxChildSize: 0.95,
+          expand: false,
+          builder: (context, scrollController) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Top Indicator & Title
+                Center(
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(vertical: 12),
+                    width: 40,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2C2C2E),
+                      borderRadius: BorderRadius.circular(2.5),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Session Summary',
+                              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              _formatDate(session.date),
+                              style: const TextStyle(fontSize: 14, color: Color(0xFF8E8E93)),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(color: Color(0xFF2C2C2E), thickness: 1),
+                
+                // Content
+                Expanded(
+                  child: ListView(
+                    controller: scrollController,
+                    padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                    children: [
+                      const SizedBox(height: 16),
+                      // Stats cards row
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _buildSummaryMiniCard(
+                              'Rate', 
+                              '${completionRate.toStringAsFixed(0)}%', 
+                              const Color(0xFF30D158)
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _buildSummaryMiniCard(
+                              'Stops (Del/Tot)', 
+                              '$deliveredStops / $totalStops', 
+                              const Color(0xFFF5A623)
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _buildSummaryMiniCard(
+                              'COD Collected', 
+                              '₹${totalCodAmount.toStringAsFixed(0)}', 
+                              const Color(0xFF30D158)
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      // Detailed counts
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2C2C2E),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          children: [
+                            _buildStatDetailRow('Total Packages', '$totalPackages', Colors.white),
+                            const Divider(color: Color(0xFF1C1C1E)),
+                            _buildStatDetailRow('Delivered Packages', '$deliveredPackages', const Color(0xFF30D158)),
+                            const Divider(color: Color(0xFF1C1C1E)),
+                            _buildStatDetailRow('Failed Packages', '$failedPackages', const Color(0xFFFF453A)),
+                            if (pendingPackages > 0) ...[
+                              const Divider(color: Color(0xFF1C1C1E)),
+                              _buildStatDetailRow('Unresolved Packages', '$pendingPackages', const Color(0xFF8E8E93)),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      
+                      const Text(
+                        'Delivery Stops',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                      ),
+                      const SizedBox(height: 12),
+                      
+                      // List of stops
+                      if (stops.isEmpty)
+                        const Center(
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(vertical: 24.0),
+                            child: Text('No stops in this session.', style: TextStyle(color: Color(0xFF8E8E93))),
+                          ),
+                        )
+                      else
+                        ListView.builder(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          itemCount: stops.length,
+                          itemBuilder: (context, index) {
+                            final stop = stops[index];
+                            final bool isStopDelivered = stop.isDelivered;
+                            final bool isStopFailed = stop.isFailed;
+
+                            Color statusColor = const Color(0xFF8E8E93);
+                            String statusLabel = 'Pending';
+                            IconData statusIcon = Icons.hourglass_empty;
+
+                            if (isStopDelivered) {
+                              statusColor = const Color(0xFF30D158);
+                              statusLabel = 'Delivered';
+                              statusIcon = Icons.check_circle;
+                            } else if (isStopFailed) {
+                              statusColor = const Color(0xFFFF453A);
+                              statusLabel = 'Failed';
+                              statusIcon = Icons.cancel;
+                            }
+
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF2C2C2E),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          stop.name,
+                                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 15),
+                                        ),
+                                      ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: statusColor.withOpacity(0.15),
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(statusIcon, color: statusColor, size: 12),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              statusLabel,
+                                              style: TextStyle(color: statusColor, fontSize: 10, fontWeight: FontWeight.bold),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    stop.addressText,
+                                    style: const TextStyle(fontSize: 12, color: Color(0xFF8E8E93)),
+                                  ),
+                                  if (stop.combinedNotes.isNotEmpty) ...[
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'Notes: ${stop.combinedNotes}',
+                                      style: const TextStyle(fontSize: 12, color: Colors.white70, fontStyle: FontStyle.italic),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      const SizedBox(height: 32),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildSummaryMiniCard(String label, String value, Color color) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2C2C2E),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 11)),
+          const SizedBox(height: 6),
+          Text(value, style: TextStyle(color: color, fontSize: 16, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatDetailRow(String label, String value, Color color) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 13)),
+        Text(value, style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.bold)),
+      ],
+    );
   }
 
   String _formatDate(DateTime date) {
